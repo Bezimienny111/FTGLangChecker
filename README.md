@@ -17,6 +17,7 @@ VS Code extension for For The Glory modding: syntax highlighting, completions, v
 - Snippets for `command = { ... }`, `date`, `deathdate`, and trigger logic (`AND/OR/NOT/someof`).
 - `type = ...` command suggestions based on FTG command lists.
 - Context-aware `which = ...` and `value = ...` suggestions depending on `type`.
+- In-place province ID menu while typing in `province =`, province-target `which =`, and province-target `value =` fields (`name (id)` list + cascade picker action).
 - Trigger sub-block snippets: `alliance`, `vassal`, `war`, `dynastic`, `truce`, `union` → `{ country = TAG }`, `relation` → `{ country = TAG value = N }`, `provincereligion`/`provinceculture` → `{ data = ... province = N }`.
 - Field + value completions inside trigger sub-blocks (`country = TAG`, `data = religion/culture`).
 - Dynamic suggestions sourced from the mod files:
@@ -38,10 +39,15 @@ VS Code extension for For The Glory modding: syntax highlighting, completions, v
 - `F12` (Go to Definition) for IDs and flags.
 - `Shift+F12` (Find All References) with inline `Peek References`.
 - CodeLens above ID/flag lines and selected `which = <id>` command lines.
+- CodeLens above `decision = {` for one-click `Localize decision (inline)`.
 - Commands:
   - `FTG: Show References`
   - `FTG: Show References from Cursor`
   - `FTG: Go to Definition from Cursor`
+  - `FTG: Jump Source <-> Localization`
+  - `FTG: Localize Current Event`
+  - `FTG: Localize Current Decision`
+  - `FTG: Insert Province ID (Cascade Picker)`
 
 ### 5) Validation (Problems)
 
@@ -57,6 +63,7 @@ VS Code extension for For The Glory modding: syntax highlighting, completions, v
 - Unknown domestic slider (`type = domestic which = ...`).
 - Unknown country tag (`type = relation which = ...`).
 - Unknown province ID for `type = addcore which = ...`.
+- Unknown event ID for `event = ID` and `type = trigger|sleepevent which = ID`.
 - Brace validation for `{}` (missing/extra closing braces).
 
 **Trigger validation:**
@@ -75,6 +82,7 @@ Hovering over any FTG keyword shows a description:
 - **Commands**: `stability`, `addcore`, `INF`, `CAV`, `relation`, `domestic`, `provincereligion`, etc.
 - **Triggers**: `AND`, `OR`, `NOT`, `exists`, `atwar`, `owned`, `control`, `year`, `flag`, etc.
 - **Structural fields**: `offset`, `deathdate`, `persistent`, `action_a`–`action_e`.
+- **Localization keys in `name`/`desc`**: hover on keys like `EVENTNAME1234`, `EVENTHIST1234`, `ACTIONNAME1234A` shows resolved value from `Localisation/English/*.csv`.
 
 ## Configuration
 
@@ -131,46 +139,59 @@ Then reload VS Code window (F1) -> (`Developer: Reload Window`).
 - `FTG: Show References`
 - `FTG: Show References from Cursor`
 - `FTG: Go to Definition from Cursor`
+- `FTG: Jump Source <-> Localization`
+- `FTG: Localize Current Event`
+- `FTG: Localize Current Decision`
+- `FTG: Insert Province ID (Cascade Picker)`
 
 ## Changelog
 
 ### 0.3.2
+
 - Validation: cross-file duplicate ID detection added for `event` and `decision` definitions.
 - Validation: fixed false positives for valid command assignment chains such as `type = relation which = TAG value = N`.
 - Validation: parser and cache flow hardened for large structured FTG files.
 
 ### 0.3.1
+
 - Validation: strict `id` format check added (`id` must contain digits only). Invalid values like `id = 3001011abc` are now reported as errors.
 - Validation: fixed false positives for logical trigger blocks (`NOT = { ... }`, `AND/OR/someof` patterns) in trailing-content detection.
 - Validation: fixed multi-line quoted strings in fields like `desc = "..."` (including empty lines inside the string) so they are no longer reported as stray content.
 - Validation: fixed structured file path detection on Windows (`Db\\Events\\...`) so event/decision rules trigger correctly.
 
 ### 0.3.0
+
 - Fixed: `NOT` and `AND` were highlighted as country tags (3-letter uppercase match) instead of logic keywords. Tags pattern now excludes `NOT` and `AND` via negative lookahead.
 
 ### 0.2.9
+
 - Inlay hints: `secedeprovince` and `cedeprovince` now show province name for `value = N` (province ID is in `value`, not `which`). Same for `giveaccess`, `cancelaccess`, `revokeaccess`, `givetrade`, `revoketrade`.
 - Added missing commands to province ID hint detection: `addcore_national`, `addcore_claim`, `addcore_casusbelli`, `removecore_*`, `gainbuilding`, `losebuilding`, `mine`, `terrain`, `heretic`, `discovered`, `tradingpost`, `vp`.
 
 ### 0.2.8
+
 - Validation: `command = { type = religion which = orthodox }` now validates the religion name in `which` against `Db/Religions/religions.txt`, both in single-line and multi-line command blocks. Same applies to `alt_provincereligion`.
 
 ### 0.2.7
+
 - Syntax highlighting for `religions.txt`: religion definition names (`catholic = {`) highlighted as definitions; religion-specific field keywords (`group`, `subgroup`, `color`, `allowed_conversion`, `heretic`, `tech_speed`, `stability_bonus`, etc.) highlighted.
 - Validation: bare religion names in `heretic`/`allowed_conversion`/`war`/`aggressiveness`/`conflict`/`income_bonus` lists inside `religions.txt` validated against known religions. Also validates `type = religion value = X` single-line commands.
 - Completions: `religion = `, `province_religion = `, `heretic = ` → suggest religion names; `group = ` → suggest group names (`christian`, `muslim`, `eastern`, `pagan`); `techgroup = ` → suggest techgroup values; cursor on bare word inside `heretic`/`allowed_conversion` block → suggest religions; cursor on key inside religion definition block → suggest religion field keywords.
 - Hover tooltips added for all religion field keywords.
 
 ### 0.2.6
+
 - Added missing grammar keywords: `historicalmonarch`, `historicalleader`, `dormant`, `category`, `rank`, `fire`, `shock`, `siege`, `movement`, `location`, `remark`, `special`, `techgroup` (structure fields), and trigger keywords `bankrupt`, `revolt`, `occupied`, `manpower`.
 - Completions: monarch block fields (`ADM/DIP/MIL`, `dormant`, etc.) and leader block fields (`category`, `rank`, stats) suggested when inside `historicalmonarch`/`historicalleader` blocks.
 - Top-level snippets: `historicalmonarch` and `historicalleader` full block templates.
 - Hover tooltips added for all new keywords.
 
 ### 0.2.5
+
 - Removed "References (inline)" CodeLens for `sleepmonarch`, `wakemonarch`, `sleepleader`, `wakeleader` — inlay hint showing the name value remains.
 
 ### 0.2.4
+
 - Fixed: References and Go-to-Definition now work for monarch and leader IDs (`sleepmonarch`, `wakemonarch`, `sleepleader`, `wakeleader`). Previously the Python script was called with unsupported kind — now handled natively in JS. Definition jumps to the monarch/leader block in `Db/Monarchs/` or `Db/Leaders/`; references find all usages in event files.
 
 ### 0.2.3

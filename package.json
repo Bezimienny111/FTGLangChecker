@@ -2,7 +2,7 @@
   "name": "ftg-refs-codelens",
   "displayName": "FTG Toolkit",
   "description": "FTG syntax highlighting, references, definitions and inline hints",
-  "version": "0.3.2",
+  "version": "0.3.7",
   "publisher": "local",
   "engines": {
     "vscode": "^1.80.0"
@@ -50,8 +50,83 @@
       {
         "command": "ftgRefs.goToDefinitionFromCursor",
         "title": "FTG: Go to Definition from Cursor"
+      },
+      {
+        "command": "ftgRefs.localizeEventFromCursor",
+        "title": "FTG: Localize Current Event"
+      },
+      {
+        "command": "ftgRefs.localizeDecisionFromCursor",
+        "title": "FTG: Localize Current Decision"
+      },
+      {
+        "command": "ftgRefs.insertProvinceIdFromCascade",
+        "title": "FTG: Insert Province ID (Cascade Picker)"
+      },
+      {
+        "command": "ftgRefs.jumpBetweenSourceAndLocalization",
+        "title": "FTG: Jump Source <-> Localization"
       }
     ],
+    "keybindings": [
+      {
+        "command": "ftgRefs.localizeEventFromCursor",
+        "key": "ctrl+alt+shift+l",
+        "when": "editorTextFocus && editorLangId == ftg"
+      },
+      {
+        "command": "ftgRefs.localizeDecisionFromCursor",
+        "key": "ctrl+alt+shift+d",
+        "when": "editorTextFocus && editorLangId == ftg"
+      },
+      {
+        "command": "ftgRefs.jumpBetweenSourceAndLocalization",
+        "key": "ctrl+alt+shift+j",
+        "when": "editorTextFocus"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "ftgRefs.localizeEventFromCursor",
+          "when": "editorTextFocus && editorLangId == ftg",
+          "group": "navigation@9"
+        },
+        {
+          "command": "ftgRefs.localizeDecisionFromCursor",
+          "when": "editorTextFocus",
+          "group": "navigation@9"
+        },
+        {
+          "command": "ftgRefs.insertProvinceIdFromCascade",
+          "when": "editorTextFocus && editorLangId == ftg",
+          "group": "navigation@10"
+        },
+        {
+          "command": "ftgRefs.jumpBetweenSourceAndLocalization",
+          "when": "editorTextFocus",
+          "group": "navigation@11"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "ftgRefs.localizeEventFromCursor",
+          "when": "editorLangId == ftg"
+        },
+        {
+          "command": "ftgRefs.localizeDecisionFromCursor",
+          "when": "editorTextFocus"
+        },
+        {
+          "command": "ftgRefs.insertProvinceIdFromCascade",
+          "when": "editorLangId == ftg"
+        },
+        {
+          "command": "ftgRefs.jumpBetweenSourceAndLocalization",
+          "when": "editorTextFocus"
+        }
+      ]
+    },
     "configuration": {
       "title": "FTG Refs",
       "properties": {

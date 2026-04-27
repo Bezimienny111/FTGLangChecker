@@ -628,7 +628,8 @@ const FTG_HOVER_DOCS = {
   treasury:
     "**command** `treasury` — Changes country treasury (ducats). `value` = amount.",
   inflation: "**command** `inflation` — Changes inflation. `value` = amount.",
-  manpower: "**command** `manpower` — Changes manpower pool. `value` = amount.",
+  manpower:
+    "**command** `manpower` — Changes manpower pool. `value` = amount.",
   badboy:
     "**command/trigger** `badboy` — Changes infamy (as command: `value` = amount). As trigger: checks if infamy >= `value`.",
   domestic:
@@ -651,7 +652,8 @@ const FTG_HOVER_DOCS = {
   religion:
     "**command** `religion` — Changes country religion. `value` = religion name.",
   setflag: "**command** `setflag` — Sets a global flag. `which` = flag name.",
-  clrflag: "**command** `clrflag` — Clears a global flag. `which` = flag name.",
+  clrflag:
+    "**command** `clrflag` — Clears a global flag. `which` = flag name.",
   trigger: "**command** `trigger` — Fires another event. `which` = event id.",
   sleepevent:
     "**command** `sleepevent` — Suspends an event. `which` = event id.",
@@ -718,7 +720,8 @@ const FTG_HOVER_DOCS = {
   someof:
     "**trigger** `someof` — A specified number of conditions must be true. Requires `number = N`.",
   random: "**trigger** `random` — Random percentage chance (0–100).",
-  exists: "**trigger** `exists` — Checks if a country exists. `exists = TAG`.",
+  exists:
+    "**trigger** `exists` — Checks if a country exists. `exists = TAG`.",
   tag: "**trigger** `tag` — Checks the country's tag. `tag = TAG`.",
   neighbour:
     "**trigger** `neighbour` — Checks if country is a neighbour. `neighbour = TAG`.",
@@ -739,7 +742,8 @@ const FTG_HOVER_DOCS = {
     "**trigger** `owned` — Checks if a province is owned by the country. `owned = province_id`.",
   control:
     "**trigger** `control` — Checks if a province is controlled by the country. `control = province_id`.",
-  ownerchange: "**trigger** `ownerchange` — Checks province ownership change.",
+  ownerchange:
+    "**trigger** `ownerchange` — Checks province ownership change.",
   controlchange:
     "**trigger** `controlchange` — Checks province control change.",
   discovered:
@@ -756,7 +760,8 @@ const FTG_HOVER_DOCS = {
   city: "**trigger** `city` — Checks if a province is a city. `city = yes/no`.",
   core_national:
     "**trigger** `core_national` — Checks if province is a national core. `core_national = province_id`.",
-  core_claim: "**trigger** `core_claim` — Checks if province is a claim core.",
+  core_claim:
+    "**trigger** `core_claim` — Checks if province is a claim core.",
   core_casusbelli:
     "**trigger** `core_casusbelli` — Checks if province is a casus belli core.",
   truce:
@@ -874,7 +879,8 @@ const FTG_HOVER_DOCS = {
     "**trigger** `revolt` — Is there a revolt in the province? `revolt = yes/no`.",
   occupied:
     "**trigger** `occupied` — Is the province occupied? `occupied = yes/no`.",
-  manpower: "**trigger** `manpower` — Checks country manpower. `manpower = N`.",
+  manpower:
+    "**trigger** `manpower` — Checks country manpower. `manpower = N`.",
 };
 
 const FTG_DATE_FIELDS = ["day", "month", "year"];
@@ -925,10 +931,17 @@ const SKIP_DIRS = new Set([
 ]);
 
 const provinceCache = new Map();
+const provinceCatalogCache = new Map();
 const dbLookupCache = new Map();
 const sourceDiscoveryCache = new Map();
 const completionDataCache = new Map();
 const crossFileIdIndexCache = new Map();
+const englishLocalizationCache = new Map();
+const reopeningWithWindows1252 = new Set();
+const FTG_FORCED_ENCODING = "windows1252";
+const EVENT_LOCALIZATION_KEY_RE =
+  /^(?:EVENTNAME\d+|EVENTHIST\d+|ACTIONNAME\d+[A-Z])$/i;
+const DECISION_LOCALIZATION_KEY_RE = /^(?:DECISIONNAME\d+|DECISIONHIST\d+)$/i;
 
 function normalizeDbName(name) {
   if (!name) {
@@ -940,6 +953,243 @@ function normalizeDbName(name) {
   }
 
   return name;
+}
+
+async function openLocation(location) {
+  const doc = await vscode.workspace.openTextDocument(location.uri);
+  const editor = await vscode.window.showTextDocument(doc, { preview: false });
+  editor.selection = new vscode.Selection(
+    location.range.start,
+    location.range.start,
+  );
+  editor.revealRange(location.range, vscode.TextEditorRevealType.InCenter);
+}
+
+function parseLocalizationJumpKey(keyRaw) {
+  const key = (keyRaw || "").trim();
+  if (!key) {
+    return undefined;
+  }
+
+  let match = key.match(/^EVENT(?:NAME|HIST)(\d+)$/i);
+  if (match) {
+    return {
+      key,
+      sourceKind: "event",
+      sourceId: match[1],
+      localizationHint: "events",
+    };
+  }
+
+  match = key.match(/^ACTIONNAME(\d+)[A-Z]$/i);
+  if (match) {
+    return {
+      key,
+      sourceKind: "event",
+      sourceId: match[1],
+      localizationHint: "events",
+    };
+  }
+
+  match = key.match(/^DECISION(?:NAME|HIST)(\d+)$/i);
+  if (match) {
+    return {
+      key,
+      sourceKind: "decision",
+      sourceId: match[1],
+      localizationHint: "decisions",
+    };
+  }
+
+  return undefined;
+}
+
+function getLocalizationKeyAtPosition(document, position) {
+  const wordRange = document.getWordRangeAtPosition(position, /[A-Za-z0-9_]+/);
+  if (wordRange) {
+    const word = document.getText(wordRange);
+    const parsed = parseLocalizationJumpKey(word);
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  const lineText = document.lineAt(position.line).text;
+  const codeText = lineText.split("#")[0];
+  const assigned = parseQuotedNameDescAtPosition(
+    codeText,
+    position.character,
+    position.character,
+  );
+  if (assigned) {
+    const parsedAssigned = parseLocalizationJumpKey(assigned.key);
+    if (parsedAssigned) {
+      return parsedAssigned;
+    }
+  }
+
+  const firstField = (lineText.split(";")[0] || "").trim();
+  return parseLocalizationJumpKey(firstField);
+}
+
+function getSourceDefinitionLocationFromLocalizationKey(root, parsedKey) {
+  const idIndex = getCrossFileIdIndex(root);
+  const refs =
+    parsedKey.sourceKind === "decision"
+      ? idIndex.decisions.get(parsedKey.sourceId)
+      : idIndex.events.get(parsedKey.sourceId);
+
+  if (!refs || !refs.length) {
+    return undefined;
+  }
+
+  const ref = refs[0];
+  return new vscode.Location(
+    vscode.Uri.file(ref.filePath),
+    new vscode.Range(ref.lineNo, 0, ref.lineNo, 0),
+  );
+}
+
+function findLocalizationKeyLocationInFile(filePath, key) {
+  if (!fs.existsSync(filePath)) {
+    return undefined;
+  }
+
+  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
+  for (let i = 0; i < lines.length; i += 1) {
+    const firstField = (lines[i].split(";")[0] || "").trim();
+    if (firstField.toUpperCase() !== key.toUpperCase()) {
+      continue;
+    }
+
+    const start = lines[i].indexOf(firstField);
+    const startChar = start >= 0 ? start : 0;
+    return new vscode.Location(
+      vscode.Uri.file(filePath),
+      new vscode.Range(i, startChar, i, startChar + firstField.length),
+    );
+  }
+
+  return undefined;
+}
+
+function getLocalizationLocationFromKey(root, parsedKey) {
+  const preferredFiles = [];
+  if (parsedKey.localizationHint === "decisions") {
+    preferredFiles.push(getEnglishDecisionsLocalizationPath(root));
+  } else {
+    preferredFiles.push(getEnglishEventsLocalizationPath(root));
+  }
+
+  const englishFiles = collectLocalizationEnglishFiles(root);
+  for (const filePath of englishFiles) {
+    if (!preferredFiles.includes(filePath)) {
+      preferredFiles.push(filePath);
+    }
+  }
+
+  for (const filePath of preferredFiles) {
+    const location = findLocalizationKeyLocationInFile(filePath, parsedKey.key);
+    if (location) {
+      return location;
+    }
+  }
+
+  return undefined;
+}
+
+function getLocalizationFileFallbackLocation(root, localizationHint) {
+  const filePath =
+    localizationHint === "decisions"
+      ? getEnglishDecisionsLocalizationPath(root)
+      : getEnglishEventsLocalizationPath(root);
+
+  return new vscode.Location(
+    vscode.Uri.file(filePath),
+    new vscode.Range(0, 0, 0, 0),
+  );
+}
+
+function readBlockId(document, block) {
+  for (let lineNo = block.startLine; lineNo <= block.endLine; lineNo += 1) {
+    const clean = document.lineAt(lineNo).text.split("#")[0];
+    const idMatch = clean.match(/\bid\s*=\s*(\d+)\b/i);
+    if (idMatch) {
+      return idMatch[1];
+    }
+  }
+  return undefined;
+}
+
+async function resolveLocalizationJumpTarget(document, position) {
+  const parsedKey = getLocalizationKeyAtPosition(document, position);
+  const root = getWorkspaceRoot(document);
+  if (!root) {
+    return undefined;
+  }
+
+  const normalizedPath = document.uri.fsPath.replace(/\\/g, "/").toLowerCase();
+  const inLocalization = normalizedPath.includes("/localisation/");
+
+  if (inLocalization && parsedKey) {
+    return getSourceDefinitionLocationFromLocalizationKey(root, parsedKey);
+  }
+
+  if (parsedKey) {
+    return (
+      getLocalizationLocationFromKey(root, parsedKey) ||
+      getLocalizationFileFallbackLocation(root, parsedKey.localizationHint)
+    );
+  }
+
+  const eventBlock = findEventBlockAtLine(document, position.line);
+  if (eventBlock) {
+    const eventId = readBlockId(document, eventBlock);
+    if (eventId) {
+      const parsedEventKey = parseLocalizationJumpKey(`EVENTNAME${eventId}`);
+      return (
+        getLocalizationLocationFromKey(root, parsedEventKey) ||
+        getLocalizationFileFallbackLocation(root, "events")
+      );
+    }
+  }
+
+  const decisionBlock = findDecisionBlockAtLine(document, position.line);
+  if (decisionBlock) {
+    const decisionId = readBlockId(document, decisionBlock);
+    if (decisionId) {
+      const parsedDecisionKey = parseLocalizationJumpKey(
+        `DECISIONNAME${decisionId}`,
+      );
+      return (
+        getLocalizationLocationFromKey(root, parsedDecisionKey) ||
+        getLocalizationFileFallbackLocation(root, "decisions")
+      );
+    }
+  }
+
+  return undefined;
+}
+
+async function jumpBetweenSourceAndLocalizationFromCursor() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showErrorMessage("FTG Toolkit: brak aktywnego edytora.");
+    return;
+  }
+
+  const target = await resolveLocalizationJumpTarget(
+    editor.document,
+    editor.selection.active,
+  );
+  if (!target) {
+    vscode.window.showInformationMessage(
+      "FTG Toolkit: brak rozpoznanego klucza lokalizacji pod kursorem lub brak celu skoku.",
+    );
+    return;
+  }
+
+  await openLocation(target);
 }
 
 function countChar(str, char) {
@@ -1237,6 +1487,17 @@ function buildEnglishLocalizationMap(root) {
   return map;
 }
 
+function getEnglishLocalizationMap(root) {
+  const cached = englishLocalizationCache.get(root);
+  if (cached) {
+    return cached;
+  }
+
+  const built = buildEnglishLocalizationMap(root);
+  englishLocalizationCache.set(root, built);
+  return built;
+}
+
 function resolveLocalizedName(rawName, localizationMap) {
   if (!rawName) {
     return rawName;
@@ -1355,9 +1616,11 @@ function buildDbLookups(root) {
     monarchs: new Map(),
     leaders: new Map(),
     countries: new Map(),
+    localization: new Map(),
   };
 
-  const localizationMap = buildEnglishLocalizationMap(root);
+  const localizationMap = getEnglishLocalizationMap(root);
+  lookups.localization = localizationMap;
   const completionData = getCompletionData(root);
 
   for (const tagRaw of completionData.countries || []) {
@@ -1479,7 +1742,9 @@ function indexStructuredIdsFromContent(content, filePath, idIndex) {
     const codeText = analyzedLine.codeText;
     const braceText = analyzedLine.braceText;
 
-    const blockOpenMatch = codeText.match(/\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\{/);
+    const blockOpenMatch = codeText.match(
+      /\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\{/,
+    );
     let openedOnThisLine = false;
 
     for (let charNo = 0; charNo < braceText.length; charNo += 1) {
@@ -1555,15 +1820,835 @@ function getCrossFileIdIndex(root) {
 
 function clearAllCaches() {
   provinceCache.clear();
+  provinceCatalogCache.clear();
   dbLookupCache.clear();
   sourceDiscoveryCache.clear();
   completionDataCache.clear();
   crossFileIdIndexCache.clear();
+  englishLocalizationCache.clear();
 }
 
 function getWorkspaceRoot(document) {
   const folder = vscode.workspace.getWorkspaceFolder(document.uri);
   return folder ? folder.uri.fsPath : undefined;
+}
+
+function isLikelyFtgDocument(document) {
+  if (!document || document.uri.scheme !== "file") {
+    return false;
+  }
+
+  if (document.languageId === "ftg") {
+    return true;
+  }
+
+  const root = getWorkspaceRoot(document);
+  if (!root) {
+    return false;
+  }
+
+  const relativePath = path
+    .relative(root, document.uri.fsPath)
+    .replace(/\\/g, "/");
+  const lowerPath = relativePath.toLowerCase();
+
+  if (
+    lowerPath.startsWith("db/") ||
+    lowerPath.startsWith("ai/") ||
+    lowerPath.startsWith("scenarios/") ||
+    lowerPath.startsWith("localisation/")
+  ) {
+    return /\.(txt|csv|eue|eug|inc)$/i.test(lowerPath);
+  }
+
+  return /\.(eue|eug|inc)$/i.test(lowerPath);
+}
+
+async function ensureWindows1252Encoding(document) {
+  if (!isLikelyFtgDocument(document)) {
+    return;
+  }
+
+  if (document.isDirty || document.encoding === FTG_FORCED_ENCODING) {
+    return;
+  }
+
+  const key = document.uri.toString();
+  if (reopeningWithWindows1252.has(key)) {
+    return;
+  }
+
+  reopeningWithWindows1252.add(key);
+  try {
+    const reopened = await vscode.workspace.openTextDocument(document.uri, {
+      encoding: FTG_FORCED_ENCODING,
+    });
+
+    const visibleEditor = vscode.window.visibleTextEditors.find(
+      (editor) => editor.document.uri.toString() === key,
+    );
+    if (visibleEditor) {
+      const selection = visibleEditor.selection;
+      const selections = visibleEditor.selections;
+      const viewColumn = visibleEditor.viewColumn;
+      await vscode.window.showTextDocument(reopened, {
+        viewColumn,
+        preserveFocus: true,
+        preview: visibleEditor.document.isUntitled ? false : undefined,
+      });
+
+      const reopenedEditor = vscode.window.visibleTextEditors.find(
+        (editor) => editor.document.uri.toString() === key,
+      );
+      if (reopenedEditor) {
+        reopenedEditor.selection = selection;
+        reopenedEditor.selections = selections;
+      }
+    }
+  } catch {
+    // best effort only
+  } finally {
+    reopeningWithWindows1252.delete(key);
+  }
+}
+
+function getEnglishEventsLocalizationPath(root) {
+  return path.join(root, "Localisation", "English", "events.csv");
+}
+
+function getEnglishDecisionsLocalizationPath(root) {
+  return path.join(root, "Localisation", "English", "decisions.csv");
+}
+
+function getDocumentEol(document) {
+  return document.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n";
+}
+
+function findLocalizationInsertPoint(document) {
+  for (let i = 0; i < document.lineCount; i += 1) {
+    if (document.lineAt(i).text.trim() === "#EOF;x") {
+      return {
+        position: new vscode.Position(i, 0),
+        eofLine: i,
+      };
+    }
+  }
+
+  const lastLine = Math.max(document.lineCount - 1, 0);
+  return {
+    position: new vscode.Position(
+      lastLine,
+      document.lineAt(lastLine).text.length,
+    ),
+    eofLine: undefined,
+  };
+}
+
+function buildLocalizationBlockText(document, entries) {
+  const eol = getDocumentEol(document);
+  const insertPoint = findLocalizationInsertPoint(document);
+  let needsLeadingSeparator = true;
+
+  if (typeof insertPoint.eofLine === "number") {
+    for (let i = insertPoint.eofLine - 1; i >= 0; i -= 1) {
+      const text = document.lineAt(i).text.trim();
+      if (!text) {
+        continue;
+      }
+      needsLeadingSeparator = text !== "#;x";
+      break;
+    }
+  }
+
+  const blockLines = [];
+  if (needsLeadingSeparator) {
+    blockLines.push("#;x");
+  }
+  for (const entry of entries) {
+    blockLines.push(`${entry.key};${entry.value};x`);
+  }
+  blockLines.push("#;x");
+
+  return {
+    position: insertPoint.position,
+    text: `${blockLines.join(eol)}${eol}`,
+  };
+}
+
+function sanitizeLocalizationValue(text) {
+  return (text || "").replace(/\r?\n/g, " ").replace(/;/g, ",").trim();
+}
+
+function sanitizeLocalizationComment(text) {
+  return (text || "").replace(/\r?\n/g, " ").replace(/#/g, "").trim();
+}
+
+function readQuotedAssignmentAtLine(document, startLine, fieldName, maxLine) {
+  const firstLine = document.lineAt(startLine).text;
+  const startMatch = firstLine.match(
+    new RegExp(`^(\\s*)${fieldName}\\s*=\\s*\"(.*)$`, "i"),
+  );
+  if (!startMatch) {
+    return undefined;
+  }
+
+  const indent = startMatch[1] || "";
+  let remainder = startMatch[2] || "";
+  const parts = [];
+  let endLine = startLine;
+
+  while (endLine <= maxLine) {
+    const quoteIndex = remainder.indexOf('"');
+    if (quoteIndex >= 0) {
+      parts.push(remainder.slice(0, quoteIndex));
+      return {
+        field: fieldName.toLowerCase(),
+        indent,
+        rawValue: parts.join("\n"),
+        startLine,
+        endLine,
+      };
+    }
+
+    parts.push(remainder);
+    endLine += 1;
+    if (endLine > maxLine) {
+      break;
+    }
+    remainder = document.lineAt(endLine).text;
+  }
+
+  return undefined;
+}
+
+function findEventBlockAtLine(document, targetLine) {
+  let inEvent = false;
+  let startLine = -1;
+  let depth = 0;
+
+  for (let i = 0; i < document.lineCount; i += 1) {
+    const clean = document.lineAt(i).text.split("#")[0];
+
+    if (!inEvent) {
+      if (/^\s*event\s*=\s*\{/i.test(clean)) {
+        inEvent = true;
+        startLine = i;
+        depth = countChar(clean, "{") - countChar(clean, "}");
+        if (depth <= 0) {
+          if (targetLine >= startLine && targetLine <= i) {
+            return { startLine, endLine: i };
+          }
+          inEvent = false;
+          startLine = -1;
+          depth = 0;
+        }
+      }
+      continue;
+    }
+
+    depth += countChar(clean, "{") - countChar(clean, "}");
+    if (depth <= 0) {
+      if (targetLine >= startLine && targetLine <= i) {
+        return { startLine, endLine: i };
+      }
+      inEvent = false;
+      startLine = -1;
+      depth = 0;
+    }
+  }
+
+  return undefined;
+}
+
+function findDecisionBlockAtLine(document, targetLine) {
+  let inDecision = false;
+  let startLine = -1;
+  let depth = 0;
+
+  for (let i = 0; i < document.lineCount; i += 1) {
+    const clean = document.lineAt(i).text.split("#")[0];
+
+    if (!inDecision) {
+      if (/^\s*decision\s*=\s*\{/i.test(clean)) {
+        inDecision = true;
+        startLine = i;
+        depth = countChar(clean, "{") - countChar(clean, "}");
+        if (depth <= 0) {
+          if (targetLine >= startLine && targetLine <= i) {
+            return { startLine, endLine: i };
+          }
+          inDecision = false;
+          startLine = -1;
+          depth = 0;
+        }
+      }
+      continue;
+    }
+
+    depth += countChar(clean, "{") - countChar(clean, "}");
+    if (depth <= 0) {
+      if (targetLine >= startLine && targetLine <= i) {
+        return { startLine, endLine: i };
+      }
+      inDecision = false;
+      startLine = -1;
+      depth = 0;
+    }
+  }
+
+  return undefined;
+}
+
+function parseEventLocalizationCandidates(document, eventBlock) {
+  const candidates = [];
+  let eventId;
+  let depth = 0;
+  let currentActionLetter;
+
+  for (
+    let lineNo = eventBlock.startLine;
+    lineNo <= eventBlock.endLine;
+    lineNo += 1
+  ) {
+    const fullLine = document.lineAt(lineNo).text;
+    const clean = fullLine.split("#")[0];
+    const beforeDepth = depth;
+    const diff = countChar(clean, "{") - countChar(clean, "}");
+
+    if (beforeDepth === 0 && /^\s*event\s*=\s*\{/i.test(clean)) {
+      depth += diff;
+      continue;
+    }
+
+    if (!eventId) {
+      const idMatch = clean.match(/\bid\s*=\s*(\d+)\b/i);
+      if (idMatch) {
+        eventId = idMatch[1];
+      }
+    }
+
+    if (beforeDepth === 1) {
+      const actionMatch = clean.match(/^\s*action_([a-z])\s*=\s*\{/i);
+      if (actionMatch) {
+        currentActionLetter = actionMatch[1].toUpperCase();
+      }
+
+      const eventNameAssignment = readQuotedAssignmentAtLine(
+        document,
+        lineNo,
+        "name",
+        eventBlock.endLine,
+      );
+      if (eventNameAssignment) {
+        candidates.push({
+          type: "eventName",
+          field: eventNameAssignment.field,
+          startLine: eventNameAssignment.startLine,
+          endLine: eventNameAssignment.endLine,
+          indent: eventNameAssignment.indent,
+          rawValue: eventNameAssignment.rawValue,
+        });
+      }
+
+      const eventDescAssignment = readQuotedAssignmentAtLine(
+        document,
+        lineNo,
+        "desc",
+        eventBlock.endLine,
+      );
+      if (eventDescAssignment) {
+        candidates.push({
+          type: "eventDesc",
+          field: eventDescAssignment.field,
+          startLine: eventDescAssignment.startLine,
+          endLine: eventDescAssignment.endLine,
+          indent: eventDescAssignment.indent,
+          rawValue: eventDescAssignment.rawValue,
+        });
+      }
+    }
+
+    if (beforeDepth === 2 && currentActionLetter) {
+      const actionNameAssignment = readQuotedAssignmentAtLine(
+        document,
+        lineNo,
+        "name",
+        eventBlock.endLine,
+      );
+      if (actionNameAssignment) {
+        candidates.push({
+          type: "actionName",
+          field: actionNameAssignment.field,
+          startLine: actionNameAssignment.startLine,
+          endLine: actionNameAssignment.endLine,
+          indent: actionNameAssignment.indent,
+          rawValue: actionNameAssignment.rawValue,
+          actionLetter: currentActionLetter,
+        });
+      }
+    }
+
+    depth += diff;
+    if (currentActionLetter && depth < 2) {
+      currentActionLetter = undefined;
+    }
+  }
+
+  return { eventId, candidates };
+}
+
+function buildEventLocalizationTransform(
+  document,
+  eventBlock,
+  localizationMap,
+) {
+  const parsed = parseEventLocalizationCandidates(document, eventBlock);
+  if (!parsed.eventId) {
+    return { error: "Nie znaleziono `id` w bieżącym evencie." };
+  }
+
+  const replacements = [];
+  const localizationEntries = [];
+  const conflicts = [];
+
+  for (const candidate of parsed.candidates) {
+    const rawValue = (candidate.rawValue || "").trim();
+    if (!rawValue || EVENT_LOCALIZATION_KEY_RE.test(rawValue)) {
+      continue;
+    }
+
+    let key;
+    if (candidate.type === "eventName") {
+      key = `EVENTNAME${parsed.eventId}`;
+    } else if (candidate.type === "eventDesc") {
+      key = `EVENTHIST${parsed.eventId}`;
+    } else {
+      key = `ACTIONNAME${parsed.eventId}${candidate.actionLetter || "A"}`;
+    }
+
+    const sanitizedValue = sanitizeLocalizationValue(rawValue);
+    const existingValue = localizationMap.get(key);
+    if (existingValue && existingValue !== sanitizedValue) {
+      conflicts.push(`${key} (istnieje już inna wartość)`);
+      continue;
+    }
+
+    if (!existingValue) {
+      localizationEntries.push({ key, value: sanitizedValue });
+    }
+
+    const commentText = sanitizeLocalizationComment(rawValue);
+    replacements.push({
+      startLine: candidate.startLine,
+      endLine: candidate.endLine,
+      text: `${candidate.indent}${candidate.field} = "${key}"${commentText ? ` #${commentText}` : ""}`,
+    });
+  }
+
+  if (
+    !replacements.length &&
+    !localizationEntries.length &&
+    !conflicts.length
+  ) {
+    return {
+      error:
+        "Bieżący event nie zawiera surowych pól `name`/`desc`/`action name` do lokalizacji.",
+    };
+  }
+
+  return {
+    eventId: parsed.eventId,
+    replacements,
+    localizationEntries,
+    conflicts,
+  };
+}
+
+async function localizeEventFromCursor() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showErrorMessage("FTG Toolkit: brak aktywnego edytora.");
+    return;
+  }
+
+  const root = getWorkspaceRoot(editor.document);
+  if (!root) {
+    vscode.window.showErrorMessage(
+      "FTG Toolkit: nie znaleziono katalogu workspace.",
+    );
+    return;
+  }
+
+  const eventBlock = findEventBlockAtLine(
+    editor.document,
+    editor.selection.active.line,
+  );
+  if (!eventBlock) {
+    vscode.window.showInformationMessage(
+      "FTG Toolkit: ustaw kursor wewnątrz eventu, który ma zostać zlokalizowany.",
+    );
+    return;
+  }
+
+  const localizationPath = getEnglishEventsLocalizationPath(root);
+  if (!fs.existsSync(path.dirname(localizationPath))) {
+    fs.mkdirSync(path.dirname(localizationPath), { recursive: true });
+  }
+  if (!fs.existsSync(localizationPath)) {
+    fs.writeFileSync(localizationPath, "", "utf8");
+  }
+
+  const localizationUri = vscode.Uri.file(localizationPath);
+  const localizationDocument =
+    await vscode.workspace.openTextDocument(localizationUri);
+  const localizationMap = getEnglishLocalizationMap(root);
+  const plan = buildEventLocalizationTransform(
+    editor.document,
+    eventBlock,
+    localizationMap,
+  );
+
+  if (plan.error) {
+    vscode.window.showInformationMessage(`FTG Toolkit: ${plan.error}`);
+    return;
+  }
+
+  const edit = new vscode.WorkspaceEdit();
+  for (const replacement of plan.replacements) {
+    const endLineText = editor.document.lineAt(replacement.endLine).text;
+    edit.replace(
+      editor.document.uri,
+      new vscode.Range(
+        replacement.startLine,
+        0,
+        replacement.endLine,
+        endLineText.length,
+      ),
+      replacement.text,
+    );
+  }
+
+  if (plan.localizationEntries.length) {
+    const block = buildLocalizationBlockText(
+      localizationDocument,
+      plan.localizationEntries,
+    );
+    edit.insert(localizationUri, block.position, block.text);
+  }
+
+  const applied = await vscode.workspace.applyEdit(edit);
+  if (!applied) {
+    vscode.window.showErrorMessage(
+      "FTG Toolkit: nie udało się zastosować zmian.",
+    );
+    return;
+  }
+
+  await editor.document.save();
+  await localizationDocument.save();
+  clearAllCaches();
+
+  const conflictSuffix = plan.conflicts.length
+    ? ` Konflikty: ${plan.conflicts.join(", ")}.`
+    : "";
+  vscode.window.showInformationMessage(
+    `FTG Toolkit: zlokalizowano event ${plan.eventId}. Dodano ${plan.localizationEntries.length} wpisów i zaktualizowano ${plan.replacements.length} pól.${conflictSuffix}`,
+  );
+}
+
+function parseDecisionLocalizationCandidates(document, decisionBlock) {
+  const candidates = [];
+  let decisionId;
+  let depth = 0;
+
+  for (
+    let lineNo = decisionBlock.startLine;
+    lineNo <= decisionBlock.endLine;
+    lineNo += 1
+  ) {
+    const fullLine = document.lineAt(lineNo).text;
+    const clean = fullLine.split("#")[0];
+    const beforeDepth = depth;
+    const diff = countChar(clean, "{") - countChar(clean, "}");
+
+    if (beforeDepth === 0 && /^\s*decision\s*=\s*\{/i.test(clean)) {
+      depth += diff;
+      continue;
+    }
+
+    if (!decisionId) {
+      const idMatch = clean.match(/\bid\s*=\s*(\d+)\b/i);
+      if (idMatch) {
+        decisionId = idMatch[1];
+      }
+    }
+
+    if (beforeDepth === 1) {
+      const decisionNameAssignment = readQuotedAssignmentAtLine(
+        document,
+        lineNo,
+        "name",
+        decisionBlock.endLine,
+      );
+      if (decisionNameAssignment) {
+        candidates.push({
+          type: "decisionName",
+          field: decisionNameAssignment.field,
+          startLine: decisionNameAssignment.startLine,
+          endLine: decisionNameAssignment.endLine,
+          indent: decisionNameAssignment.indent,
+          rawValue: decisionNameAssignment.rawValue,
+        });
+      }
+
+      const decisionDescAssignment = readQuotedAssignmentAtLine(
+        document,
+        lineNo,
+        "desc",
+        decisionBlock.endLine,
+      );
+      if (decisionDescAssignment) {
+        candidates.push({
+          type: "decisionDesc",
+          field: decisionDescAssignment.field,
+          startLine: decisionDescAssignment.startLine,
+          endLine: decisionDescAssignment.endLine,
+          indent: decisionDescAssignment.indent,
+          rawValue: decisionDescAssignment.rawValue,
+        });
+      }
+    }
+
+    depth += diff;
+  }
+
+  return { decisionId, candidates };
+}
+
+function buildDecisionLocalizationTransform(
+  document,
+  decisionBlock,
+  localizationMap,
+) {
+  const parsed = parseDecisionLocalizationCandidates(document, decisionBlock);
+  if (!parsed.decisionId) {
+    return { error: "Nie znaleziono `id` w bieżącej decyzji." };
+  }
+
+  const replacements = [];
+  const localizationEntries = [];
+  const conflicts = [];
+
+  for (const candidate of parsed.candidates) {
+    const rawValue = (candidate.rawValue || "").trim();
+    if (!rawValue || DECISION_LOCALIZATION_KEY_RE.test(rawValue)) {
+      continue;
+    }
+
+    const key =
+      candidate.type === "decisionName"
+        ? `DECISIONNAME${parsed.decisionId}`
+        : `DECISIONHIST${parsed.decisionId}`;
+
+    const sanitizedValue = sanitizeLocalizationValue(rawValue);
+    const existingValue = localizationMap.get(key);
+    if (existingValue && existingValue !== sanitizedValue) {
+      conflicts.push(`${key} (istnieje już inna wartość)`);
+      continue;
+    }
+
+    if (!existingValue) {
+      localizationEntries.push({ key, value: sanitizedValue });
+    }
+
+    const commentText = sanitizeLocalizationComment(rawValue);
+    replacements.push({
+      startLine: candidate.startLine,
+      endLine: candidate.endLine,
+      text: `${candidate.indent}${candidate.field} = "${key}"${commentText ? ` #${commentText}` : ""}`,
+    });
+  }
+
+  if (
+    !replacements.length &&
+    !localizationEntries.length &&
+    !conflicts.length
+  ) {
+    return {
+      error:
+        "Bieżąca decyzja nie zawiera surowych pól `name`/`desc` do lokalizacji.",
+    };
+  }
+
+  return {
+    decisionId: parsed.decisionId,
+    replacements,
+    localizationEntries,
+    conflicts,
+  };
+}
+
+async function localizeDecisionFromCursor(uri, lineNo) {
+  const editor = uri
+    ? await vscode.window.showTextDocument(
+        await vscode.workspace.openTextDocument(uri),
+        { preview: false },
+      )
+    : vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showErrorMessage("FTG Toolkit: brak aktywnego edytora.");
+    return;
+  }
+
+  const root = getWorkspaceRoot(editor.document);
+  if (!root) {
+    vscode.window.showErrorMessage(
+      "FTG Toolkit: nie znaleziono katalogu workspace.",
+    );
+    return;
+  }
+
+  const decisionBlock = findDecisionBlockAtLine(
+    editor.document,
+    Number.isInteger(lineNo)
+      ? Math.max(lineNo, 0)
+      : editor.selection.active.line,
+  );
+  if (!decisionBlock) {
+    vscode.window.showInformationMessage(
+      "FTG Toolkit: ustaw kursor wewnątrz decyzji, która ma zostać zlokalizowana.",
+    );
+    return;
+  }
+
+  const localizationPath = getEnglishDecisionsLocalizationPath(root);
+  if (!fs.existsSync(path.dirname(localizationPath))) {
+    fs.mkdirSync(path.dirname(localizationPath), { recursive: true });
+  }
+  if (!fs.existsSync(localizationPath)) {
+    fs.writeFileSync(localizationPath, "", "utf8");
+  }
+
+  const localizationUri = vscode.Uri.file(localizationPath);
+  const localizationDocument =
+    await vscode.workspace.openTextDocument(localizationUri);
+  const localizationMap = getEnglishLocalizationMap(root);
+  const plan = buildDecisionLocalizationTransform(
+    editor.document,
+    decisionBlock,
+    localizationMap,
+  );
+
+  if (plan.error) {
+    vscode.window.showInformationMessage(`FTG Toolkit: ${plan.error}`);
+    return;
+  }
+
+  const edit = new vscode.WorkspaceEdit();
+  for (const replacement of plan.replacements) {
+    const endLineText = editor.document.lineAt(replacement.endLine).text;
+    edit.replace(
+      editor.document.uri,
+      new vscode.Range(
+        replacement.startLine,
+        0,
+        replacement.endLine,
+        endLineText.length,
+      ),
+      replacement.text,
+    );
+  }
+
+  if (plan.localizationEntries.length) {
+    const block = buildLocalizationBlockText(
+      localizationDocument,
+      plan.localizationEntries,
+    );
+    edit.insert(localizationUri, block.position, block.text);
+  }
+
+  const applied = await vscode.workspace.applyEdit(edit);
+  if (!applied) {
+    vscode.window.showErrorMessage(
+      "FTG Toolkit: nie udało się zastosować zmian.",
+    );
+    return;
+  }
+
+  await editor.document.save();
+  await localizationDocument.save();
+  clearAllCaches();
+
+  const conflictSuffix = plan.conflicts.length
+    ? ` Konflikty: ${plan.conflicts.join(", ")}.`
+    : "";
+  vscode.window.showInformationMessage(
+    `FTG Toolkit: zlokalizowano decyzję ${plan.decisionId}. Dodano ${plan.localizationEntries.length} wpisów i zaktualizowano ${plan.replacements.length} pól.${conflictSuffix}`,
+  );
+}
+
+function hasEventDefinition(idIndex, idValue) {
+  if (!idIndex || !idValue) {
+    return false;
+  }
+  return (idIndex.events?.get(idValue) || []).length > 0;
+}
+
+function validateEventReferencesInLine(
+  diagnostics,
+  codeText,
+  lineNo,
+  currentBlock,
+  commandTypeByDepth,
+  braceDepth,
+  crossFileIdIndex,
+) {
+  const sameLineCommandRef = codeText.match(
+    /\btype\s*=\s*(trigger|sleepevent)\b[^\n\r}]*\bwhich\s*=\s*(\d+)\b/i,
+  );
+  if (sameLineCommandRef) {
+    const eventId = sameLineCommandRef[2];
+    if (!hasEventDefinition(crossFileIdIndex, eventId)) {
+      diagnostics.push(
+        new vscode.Diagnostic(
+          rangeForValue(codeText, lineNo, eventId),
+          `Unknown event id '${eventId}' referenced by command '${sameLineCommandRef[1]}'.`,
+          vscode.DiagnosticSeverity.Warning,
+        ),
+      );
+    }
+  } else if (currentBlock === "command") {
+    const cmdType = commandTypeByDepth.get(braceDepth);
+    if (cmdType === "trigger" || cmdType === "sleepevent") {
+      const multiLineWhich = codeText.match(/\bwhich\s*=\s*(\d+)\b/i);
+      if (multiLineWhich) {
+        const eventId = multiLineWhich[1];
+        if (!hasEventDefinition(crossFileIdIndex, eventId)) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, eventId),
+              `Unknown event id '${eventId}' referenced by command '${cmdType}'.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  const triggerEventRef = codeText.match(/\bevent\s*=\s*(\d+)\b/i);
+  if (triggerEventRef) {
+    const eventId = triggerEventRef[1];
+    if (!hasEventDefinition(crossFileIdIndex, eventId)) {
+      diagnostics.push(
+        new vscode.Diagnostic(
+          rangeForValue(codeText, lineNo, eventId),
+          `Unknown event id '${eventId}' referenced by trigger field 'event'.`,
+          vscode.DiagnosticSeverity.Warning,
+        ),
+      );
+    }
+  }
 }
 
 function parseSymbolFromLine(line) {
@@ -1792,6 +2877,42 @@ function parseCountryTagsInLine(lineText, lineNo) {
   return results;
 }
 
+function parseLocalizationKeysInLine(lineText, lineNo) {
+  const results = [];
+  const assignRe = /\b(name|desc)\s*=\s*"([^"]+)"/gi;
+
+  let match = assignRe.exec(lineText);
+  while (match) {
+    const field = (match[1] || "").toLowerCase();
+    const key = (match[2] || "").trim();
+    if (!key) {
+      match = assignRe.exec(lineText);
+      continue;
+    }
+
+    const startChar = match.index + match[0].lastIndexOf(match[2]);
+    const endChar = startChar + match[2].length;
+    results.push({
+      kind: "localization",
+      id: key,
+      field,
+      hintPos: new vscode.Position(lineNo, endChar),
+    });
+
+    match = assignRe.exec(lineText);
+  }
+
+  return results;
+}
+
+function truncateInlayText(value, maxLength = 90) {
+  const normalized = (value || "").replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength)}…`;
+}
+
 function parseCommandWhichTargetsInLine(lineText, lineNo) {
   const results = [];
   COMMAND_TYPE_WHICH_RE.lastIndex = 0;
@@ -1924,6 +3045,87 @@ function parseProvinceMap(content) {
   return map;
 }
 
+function parseProvinceCatalog(content) {
+  const items = [];
+  const lines = content.split(/\r?\n/);
+
+  let inProvinceBlock = false;
+  let currentId = undefined;
+  let currentName = undefined;
+  let currentContinent = undefined;
+  let currentRegion = undefined;
+  let currentArea = undefined;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (!inProvinceBlock) {
+      if (/^province\s*=\s*\{\s*$/i.test(trimmed)) {
+        inProvinceBlock = true;
+        currentId = undefined;
+        currentName = undefined;
+        currentContinent = undefined;
+        currentRegion = undefined;
+        currentArea = undefined;
+      }
+      continue;
+    }
+
+    const idMatch = trimmed.match(/^id\s*=\s*(\d+)\b/i);
+    if (idMatch) {
+      currentId = idMatch[1];
+    }
+
+    const nameMatch = trimmed.match(/^name\s*=\s*"([^"]+)"/i);
+    if (nameMatch) {
+      currentName = nameMatch[1];
+    }
+
+    const continentMatch = trimmed.match(/^continent\s*=\s*"([^"]+)"/i);
+    if (continentMatch) {
+      currentContinent = continentMatch[1];
+    }
+
+    const regionMatch = trimmed.match(/^region\s*=\s*"([^"]+)"/i);
+    if (regionMatch) {
+      currentRegion = regionMatch[1];
+    }
+
+    const areaMatch = trimmed.match(/^area\s*=\s*"([^"]+)"/i);
+    if (areaMatch) {
+      currentArea = areaMatch[1];
+    }
+
+    if (/^\}/.test(trimmed)) {
+      if (currentId && currentName) {
+        items.push({
+          id: currentId,
+          name: normalizeDbName(currentName),
+          continent: currentContinent || "[brak kontynentu]",
+          region: currentRegion || "[brak regionu]",
+          area: currentArea || "[brak area]",
+        });
+      }
+      inProvinceBlock = false;
+      currentId = undefined;
+      currentName = undefined;
+      currentContinent = undefined;
+      currentRegion = undefined;
+      currentArea = undefined;
+    }
+  }
+
+  items.sort((a, b) => {
+    const byName = a.name.localeCompare(b.name);
+    if (byName !== 0) {
+      return byName;
+    }
+    return Number(a.id) - Number(b.id);
+  });
+
+  return items;
+}
+
 function getProvinceMap(root) {
   const cfg = vscode.workspace.getConfiguration("ftgRefs");
   const provincesRel = (cfg.get("provincesPath", "") || "").trim();
@@ -1949,6 +3151,37 @@ function getProvinceMap(root) {
   const content = fs.readFileSync(provincesAbs, "utf8");
   const parsed = parseProvinceMap(content);
   provinceCache.set(provincesAbs, { mtimeMs: stat.mtimeMs, map: parsed });
+  return parsed;
+}
+
+function getProvinceCatalog(root) {
+  const cfg = vscode.workspace.getConfiguration("ftgRefs");
+  const provincesRel = (cfg.get("provincesPath", "") || "").trim();
+
+  let provincesAbs;
+  if (provincesRel) {
+    provincesAbs = path.join(root, provincesRel);
+  } else {
+    const sources = getDataSources(root);
+    provincesAbs = sources.provinceFile;
+  }
+
+  if (!provincesAbs || !fs.existsSync(provincesAbs)) {
+    return undefined;
+  }
+
+  const stat = fs.statSync(provincesAbs);
+  const cache = provinceCatalogCache.get(provincesAbs);
+  if (cache && cache.mtimeMs === stat.mtimeMs) {
+    return cache.items;
+  }
+
+  const content = fs.readFileSync(provincesAbs, "utf8");
+  const parsed = parseProvinceCatalog(content);
+  provinceCatalogCache.set(provincesAbs, {
+    mtimeMs: stat.mtimeMs,
+    items: parsed,
+  });
   return parsed;
 }
 
@@ -2351,6 +3584,46 @@ function createSnippetItem(label, snippet, detail, sortText = "000") {
   item.insertText = new vscode.SnippetString(snippet);
   item.detail = detail;
   item.sortText = sortText;
+  return item;
+}
+
+function createProvinceCompletionItems(catalog, wordRange) {
+  if (!catalog?.length) {
+    return [];
+  }
+
+  return catalog.map((item, index) => {
+    const completion = new vscode.CompletionItem(
+      `${item.name} (${item.id})`,
+      vscode.CompletionItemKind.Value,
+    );
+    completion.insertText = item.id;
+    completion.filterText = `${item.id} ${item.name} ${item.continent} ${item.region} ${item.area}`;
+    completion.detail = `province id: ${item.id}`;
+    completion.documentation = `${item.continent} / ${item.region} / ${item.area}`;
+    completion.sortText = `1${String(index).padStart(5, "0")}`;
+    if (wordRange) {
+      completion.range = wordRange;
+    }
+    return completion;
+  });
+}
+
+function createCascadePickerCompletionItem(wordRange) {
+  const item = new vscode.CompletionItem(
+    "Wybierz prowincj? (menu kaskadowe)",
+    vscode.CompletionItemKind.Snippet,
+  );
+  item.insertText = "";
+  item.detail = "FTG province picker";
+  item.sortText = "000000";
+  item.command = {
+    command: "ftgRefs.insertProvinceIdFromCascade",
+    title: "FTG: Insert Province ID (Cascade Picker)",
+  };
+  if (wordRange) {
+    item.range = wordRange;
+  }
   return item;
 }
 
@@ -3101,9 +4374,7 @@ function isValidAssignmentChain(text) {
       return true;
     }
 
-    const keyMatch = text
-      .slice(index)
-      .match(/^[A-Za-z_][A-Za-z0-9_]*/);
+    const keyMatch = text.slice(index).match(/^[A-Za-z_][A-Za-z0-9_]*/);
     if (!keyMatch) {
       return false;
     }
@@ -3472,673 +4743,690 @@ function validateGarbageAfterBlockOpener(
 
 function validateFtgDocument(document) {
   try {
-  if (!shouldValidateDocument(document)) {
-    return [];
-  }
+    if (!shouldValidateDocument(document)) {
+      return [];
+    }
 
-  const root = getWorkspaceRoot(document);
-  const completionData = root
-    ? getCompletionData(root)
-    : {
-        cultures: [],
-        religions: [],
-        techgroups: [],
-        countries: [],
-        aiFiles: [],
-      };
-  const provinceMap = root ? getProvinceMap(root) : undefined;
-  const crossFileIdIndex = root ? getCrossFileIdIndex(root) : undefined;
-  const diagnostics = [];
+    const root = getWorkspaceRoot(document);
+    const completionData = root
+      ? getCompletionData(root)
+      : {
+          cultures: [],
+          religions: [],
+          techgroups: [],
+          countries: [],
+          aiFiles: [],
+        };
+    const provinceMap = root ? getProvinceMap(root) : undefined;
+    const crossFileIdIndex = root ? getCrossFileIdIndex(root) : undefined;
+    const diagnostics = [];
 
-  const filePath = document.uri.fsPath;
-  const isReligionsFile = /religions\.txt$/i.test(filePath);
-  const isStructuredFtgFile = isStructuredFtgFilePath(filePath);
+    const filePath = document.uri.fsPath;
+    const isReligionsFile = /religions\.txt$/i.test(filePath);
+    const isStructuredFtgFile = isStructuredFtgFilePath(filePath);
 
-  const religionSet = new Set(
-    (completionData.religions || []).map((value) => value.toLowerCase()),
-  );
-  const countrySet = new Set(
-    (completionData.countries || []).map((value) => value.toUpperCase()),
-  );
-  const domesticSet = new Set(
-    FTG_DOMESTIC_SLIDERS.map((value) => value.toLowerCase()),
-  );
-  const cultureSet = new Set(
-    (completionData.cultures || []).map((value) => value.toLowerCase()),
-  );
-  // yes/no boolean trigger fields
-  const BOOL_TRIGGER_FIELDS = new Set([
-    "atwar",
-    "isvassal",
-    "elector",
-    "emperor",
-    "hre",
-    "ai",
-    "city",
-    "bankrupt",
-    "revolt",
-    "occupied",
-  ]);
-  // country-tag trigger fields (single value on same line)
-  const COUNTRY_TAG_TRIGGER_FIELDS = new Set([
-    "exists",
-    "tag",
-    "neighbour",
-    "overlord",
-    "vassal",
-    "alliance",
-    "war",
-    "dynastic",
-  ]);
-  // province-id trigger fields
-  const PROVINCE_ID_TRIGGER_FIELDS = new Set(["owned", "control"]);
+    const religionSet = new Set(
+      (completionData.religions || []).map((value) => value.toLowerCase()),
+    );
+    const countrySet = new Set(
+      (completionData.countries || []).map((value) => value.toUpperCase()),
+    );
+    const domesticSet = new Set(
+      FTG_DOMESTIC_SLIDERS.map((value) => value.toLowerCase()),
+    );
+    const cultureSet = new Set(
+      (completionData.cultures || []).map((value) => value.toLowerCase()),
+    );
+    // yes/no boolean trigger fields
+    const BOOL_TRIGGER_FIELDS = new Set([
+      "atwar",
+      "isvassal",
+      "elector",
+      "emperor",
+      "hre",
+      "ai",
+      "city",
+      "bankrupt",
+      "revolt",
+      "occupied",
+    ]);
+    // country-tag trigger fields (single value on same line)
+    const COUNTRY_TAG_TRIGGER_FIELDS = new Set([
+      "exists",
+      "tag",
+      "neighbour",
+      "overlord",
+      "vassal",
+      "alliance",
+      "war",
+      "dynastic",
+    ]);
+    // province-id trigger fields
+    const PROVINCE_ID_TRIGGER_FIELDS = new Set(["owned", "control"]);
 
-  const braceStack = [];
-  // tracks block names for context (parallels braceStack)
-  const blockNameStack = [];
-  // tracks "type = X" value per depth inside command blocks: depth -> commandType
-  const commandTypeByDepth = new Map();
-  // event/decision ID uniqueness: id -> { lineNo, colStart }
-  const eventIdMap = new Map();
-  const decisionIdMap = new Map();
-  let inMultilineString = false;
+    const braceStack = [];
+    // tracks block names for context (parallels braceStack)
+    const blockNameStack = [];
+    // tracks "type = X" value per depth inside command blocks: depth -> commandType
+    const commandTypeByDepth = new Map();
+    // event/decision ID uniqueness: id -> { lineNo, colStart }
+    const eventIdMap = new Map();
+    const decisionIdMap = new Map();
+    let inMultilineString = false;
 
-  for (let lineNo = 0; lineNo < document.lineCount; lineNo += 1) {
-    const lineText = document.lineAt(lineNo).text;
-    const analyzedLine = analyzeFtgLine(lineText, inMultilineString);
-    const wasInMultilineString = inMultilineString;
-    inMultilineString = analyzedLine.endsInString;
-    const braceText = analyzedLine.braceText;
-    const codeText = analyzedLine.codeText;
+    for (let lineNo = 0; lineNo < document.lineCount; lineNo += 1) {
+      const lineText = document.lineAt(lineNo).text;
+      const analyzedLine = analyzeFtgLine(lineText, inMultilineString);
+      const wasInMultilineString = inMultilineString;
+      inMultilineString = analyzedLine.endsInString;
+      const braceText = analyzedLine.braceText;
+      const codeText = analyzedLine.codeText;
 
-    // track block open/close before character scan so blockNameStack stays in sync
-    // detect "blockname = {" on this line to name outgoing blocks
-    const blockOpenMatch = codeText.match(/\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\{/);
+      // track block open/close before character scan so blockNameStack stays in sync
+      // detect "blockname = {" on this line to name outgoing blocks
+      const blockOpenMatch = codeText.match(
+        /\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\{/,
+      );
 
-    let openedOnThisLine = false;
-    for (let charNo = 0; charNo < braceText.length; charNo += 1) {
-      const char = braceText[charNo];
-      if (char === "{") {
-        braceStack.push({ lineNo, charNo });
-        const blockName =
-          !openedOnThisLine && blockOpenMatch
-            ? blockOpenMatch[1].toLowerCase()
-            : null;
-        blockNameStack.push(blockName);
-        openedOnThisLine = true;
-      } else if (char === "}") {
-        if (!braceStack.length) {
-          diagnostics.push(
-            new vscode.Diagnostic(
-              new vscode.Range(lineNo, charNo, lineNo, charNo + 1),
-              "Unmatched closing brace '}'.",
-              vscode.DiagnosticSeverity.Error,
-            ),
-          );
-        } else {
-          const depth = braceStack.length;
-          commandTypeByDepth.delete(depth);
-          braceStack.pop();
-          blockNameStack.pop();
+      let openedOnThisLine = false;
+      for (let charNo = 0; charNo < braceText.length; charNo += 1) {
+        const char = braceText[charNo];
+        if (char === "{") {
+          braceStack.push({ lineNo, charNo });
+          const blockName =
+            !openedOnThisLine && blockOpenMatch
+              ? blockOpenMatch[1].toLowerCase()
+              : null;
+          blockNameStack.push(blockName);
+          openedOnThisLine = true;
+        } else if (char === "}") {
+          if (!braceStack.length) {
+            diagnostics.push(
+              new vscode.Diagnostic(
+                new vscode.Range(lineNo, charNo, lineNo, charNo + 1),
+                "Unmatched closing brace '}'.",
+                vscode.DiagnosticSeverity.Error,
+              ),
+            );
+          } else {
+            const depth = braceStack.length;
+            commandTypeByDepth.delete(depth);
+            braceStack.pop();
+            blockNameStack.pop();
+          }
         }
       }
-    }
 
-    if (!codeText.trim()) {
-      continue;
-    }
+      if (!codeText.trim()) {
+        continue;
+      }
 
-    if (wasInMultilineString) {
-      continue;
-    }
+      if (wasInMultilineString) {
+        continue;
+      }
 
-    // current block context (innermost)
-    const currentBlock = blockNameStack.length
-      ? blockNameStack[blockNameStack.length - 1]
-      : null;
-    const parentBlock =
-      blockNameStack.length > 1
-        ? blockNameStack[blockNameStack.length - 2]
+      // current block context (innermost)
+      const currentBlock = blockNameStack.length
+        ? blockNameStack[blockNameStack.length - 1]
         : null;
+      const parentBlock =
+        blockNameStack.length > 1
+          ? blockNameStack[blockNameStack.length - 2]
+          : null;
 
-    // ── misplaced fields outside blocks ─────────────────────────────────────
-    validateTopLevelFieldPlacement(
-      diagnostics,
-      codeText,
-      lineNo,
-      currentBlock,
-      filePath,
-    );
-
-    // ── stray standalone text inside blocks ────────────────────────────────
-    validateUnexpectedContentInsideBlock(
-      diagnostics,
-      codeText,
-      lineNo,
-      currentBlock,
-      filePath,
-      isReligionsFile,
-    );
-
-    // ── trailing garbage after valid field content ─────────────────────────
-    validateTrailingGarbageAfterValidContent(
-      diagnostics,
-      codeText,
-      lineNo,
-      currentBlock,
-      filePath,
-    );
-
-    // ── garbage immediately after block opener ─────────────────────────────
-    validateGarbageAfterBlockOpener(
-      diagnostics,
-      codeText,
-      lineNo,
-      currentBlock,
-      filePath,
-    );
-
-    // ── track type = X inside command blocks ─────────────────────────────────
-    if (currentBlock === "command") {
-      const typeMatch = codeText.match(
-        /\btype\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
+      // ── misplaced fields outside blocks ─────────────────────────────────────
+      validateTopLevelFieldPlacement(
+        diagnostics,
+        codeText,
+        lineNo,
+        currentBlock,
+        filePath,
       );
-      if (typeMatch) {
-        commandTypeByDepth.set(braceStack.length, typeMatch[1].toLowerCase());
-      }
-    }
 
-    // ── misplaced fields in trigger sub-blocks ──────────────────────────────
-    validateFieldPlacementInTriggerSubBlock(
-      diagnostics,
-      codeText,
-      lineNo,
-      currentBlock,
-      parentBlock,
-    );
-
-    // ── track type = X inside command blocks ─────────────────────────────────
-    if (currentBlock === "command") {
-      const typeMatch = codeText.match(
-        /\btype\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
+      // ── stray standalone text inside blocks ────────────────────────────────
+      validateUnexpectedContentInsideBlock(
+        diagnostics,
+        codeText,
+        lineNo,
+        currentBlock,
+        filePath,
+        isReligionsFile,
       );
-      if (typeMatch) {
-        commandTypeByDepth.set(braceStack.length, typeMatch[1].toLowerCase());
-      }
-    }
 
-    // ── religions.txt: bare religion name token in list blocks ───────────────
-    if (
-      isReligionsFile &&
-      currentBlock &&
-      FTG_RELIGION_LIST_BLOCKS.has(currentBlock)
-    ) {
-      const bareWordMatch = codeText.match(/^\s*([a-z][a-z_0-9]*)\s*$/i);
-      if (bareWordMatch) {
-        const value = bareWordMatch[1];
-        if (!religionSet.has(value.toLowerCase()) && religionSet.size > 0) {
-          diagnostics.push(
-            new vscode.Diagnostic(
-              rangeForValue(codeText, lineNo, value),
-              `Unknown religion '${value}' in '${currentBlock}' list.`,
-              vscode.DiagnosticSeverity.Warning,
-            ),
-          );
+      // ── trailing garbage after valid field content ─────────────────────────
+      validateTrailingGarbageAfterValidContent(
+        diagnostics,
+        codeText,
+        lineNo,
+        currentBlock,
+        filePath,
+      );
+
+      // ── garbage immediately after block opener ─────────────────────────────
+      validateGarbageAfterBlockOpener(
+        diagnostics,
+        codeText,
+        lineNo,
+        currentBlock,
+        filePath,
+      );
+
+      // ── track type = X inside command blocks ─────────────────────────────────
+      if (currentBlock === "command") {
+        const typeMatch = codeText.match(
+          /\btype\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
+        );
+        if (typeMatch) {
+          commandTypeByDepth.set(braceStack.length, typeMatch[1].toLowerCase());
         }
       }
-    }
 
-    // ── type = religion/alt_provincereligion ... value = X (single-line cmd) ──
-    const cmdRelMatch = codeText.match(
-      /\btype\s*=\s*(religion|alt_provincereligion)\b[^\n\r}]*\bvalue\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
-    );
-    if (cmdRelMatch) {
-      const value = cmdRelMatch[2];
-      if (!religionSet.has(value.toLowerCase()) && religionSet.size > 0) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, value),
-            `Unknown religion '${value}'. Check Db/Religions/religions.txt.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
-        );
-      }
-    }
+      // ── misplaced fields in trigger sub-blocks ──────────────────────────────
+      validateFieldPlacementInTriggerSubBlock(
+        diagnostics,
+        codeText,
+        lineNo,
+        currentBlock,
+        parentBlock,
+      );
 
-    // ── type = religion ... which = X (same line or multi-line command block) ─
-    const cmdRelWhichSameLine = codeText.match(
-      /\btype\s*=\s*(religion|alt_provincereligion)\b[^\n\r}]*\bwhich\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
-    );
-    if (cmdRelWhichSameLine) {
-      const value = cmdRelWhichSameLine[2];
-      if (!religionSet.has(value.toLowerCase()) && religionSet.size > 0) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, value),
-            `Unknown religion '${value}'. Check Db/Religions/religions.txt.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
+      // ── track type = X inside command blocks ─────────────────────────────────
+      if (currentBlock === "command") {
+        const typeMatch = codeText.match(
+          /\btype\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
         );
+        if (typeMatch) {
+          commandTypeByDepth.set(braceStack.length, typeMatch[1].toLowerCase());
+        }
       }
-    } else if (currentBlock === "command") {
-      // multi-line: which = X on a separate line
-      const cmdType = commandTypeByDepth.get(braceStack.length);
-      if (cmdType === "religion" || cmdType === "alt_provincereligion") {
-        const whichMatch = codeText.match(
-          /\bwhich\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
-        );
-        if (whichMatch) {
-          const value = whichMatch[1];
+
+      // ── religions.txt: bare religion name token in list blocks ───────────────
+      if (
+        isReligionsFile &&
+        currentBlock &&
+        FTG_RELIGION_LIST_BLOCKS.has(currentBlock)
+      ) {
+        const bareWordMatch = codeText.match(/^\s*([a-z][a-z_0-9]*)\s*$/i);
+        if (bareWordMatch) {
+          const value = bareWordMatch[1];
           if (!religionSet.has(value.toLowerCase()) && religionSet.size > 0) {
             diagnostics.push(
               new vscode.Diagnostic(
                 rangeForValue(codeText, lineNo, value),
-                `Unknown religion '${value}'. Check Db/Religions/religions.txt.`,
+                `Unknown religion '${value}' in '${currentBlock}' list.`,
                 vscode.DiagnosticSeverity.Warning,
               ),
             );
           }
         }
       }
-    }
 
-    // ── religion = X ──────────────────────────────────────────────────────────
-    const religionMatch = codeText.match(
-      /\breligion\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
-    );
-    if (religionMatch) {
-      const value = religionMatch[1];
-      if (!religionSet.has(value.toLowerCase())) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, value),
-            `Unknown religion '${value}'. Check Db/Religions/religions.txt.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
-        );
-      }
-    }
-
-    // ── type = domestic which = X ─────────────────────────────────────────────
-    const domesticMatch = codeText.match(
-      /\btype\s*=\s*domestic\b[^\n\r}]*\bwhich\s*=\s*([A-Za-z_]+)\b/i,
-    );
-    if (domesticMatch) {
-      const value = domesticMatch[1];
-      if (!domesticSet.has(value.toLowerCase())) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, value),
-            `Unknown domestic slider '${value}'.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
-        );
-      }
-    }
-
-    // ── type = relation which = TAG ───────────────────────────────────────────
-    const relationMatch = codeText.match(
-      /\btype\s*=\s*relation\b[^\n\r}]*\bwhich\s*=\s*([A-Za-z0-9_]+)\b/i,
-    );
-    if (relationMatch) {
-      const value = relationMatch[1];
-      const upper = value.toUpperCase();
-      const isSpecial =
-        FTG_COUNTRY_SPECIAL_VALUES.includes(value) ||
-        FTG_COUNTRY_SPECIAL_VALUES.includes(upper.toLowerCase());
-      if (!countrySet.has(upper) && !isSpecial) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, value),
-            `Unknown country tag '${value}' for relation.which.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
-        );
-      }
-    }
-
-    // ── type = addcore which = N ──────────────────────────────────────────────
-    const addcoreMatch = codeText.match(
-      /\btype\s*=\s*addcore\b[^\n\r}]*\bwhich\s*=\s*(-?\d+)\b/i,
-    );
-    if (addcoreMatch) {
-      const value = addcoreMatch[1];
-      const num = Number(value);
-      if (
-        Number.isFinite(num) &&
-        num > 0 &&
-        provinceMap &&
-        !provinceMap.has(String(num))
-      ) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, value),
-            `Unknown province id '${value}' for addcore.which.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
-        );
-      }
-    }
-
-    // ── action_X letter must be a-e ──────────────────────────────────────────
-    const actionLetterMatch = codeText.match(/\baction_([A-Za-z])\s*=/i);
-    if (actionLetterMatch) {
-      const letter = actionLetterMatch[1].toLowerCase();
-      if (!"abcde".includes(letter)) {
-        const badToken = `action_${actionLetterMatch[1]}`;
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, badToken),
-            `Invalid action name '${badToken}'. Only action_a through action_e are valid.`,
-            vscode.DiagnosticSeverity.Error,
-          ),
-        );
-      }
-    }
-
-    // ── id format + uniqueness (event/decision) ─────────────────────────────
-    const idFieldMatch = codeText.match(/^\s*id\s*=\s*(.+?)\s*$/i);
-    if (idFieldMatch) {
-      const rawIdValue = (idFieldMatch[1] || "").trim();
-      if (!/^\d+$/.test(rawIdValue)) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, rawIdValue || "id"),
-            `Invalid id value '${rawIdValue}'. Field 'id' must contain only digits.`,
-            vscode.DiagnosticSeverity.Error,
-          ),
-        );
-      }
-    }
-
-    const idMatch = codeText.match(/^\s*id\s*=\s*(\d+)\s*$/i);
-    if (idMatch) {
-      const idVal = idMatch[1];
-      const outerBlock = blockNameStack.length ? blockNameStack[0] : null;
-      if (outerBlock === "event") {
-        if (eventIdMap.has(idVal)) {
+      // ── type = religion/alt_provincereligion ... value = X (single-line cmd) ──
+      const cmdRelMatch = codeText.match(
+        /\btype\s*=\s*(religion|alt_provincereligion)\b[^\n\r}]*\bvalue\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
+      );
+      if (cmdRelMatch) {
+        const value = cmdRelMatch[2];
+        if (!religionSet.has(value.toLowerCase()) && religionSet.size > 0) {
           diagnostics.push(
             new vscode.Diagnostic(
-              rangeForValue(codeText, lineNo, idVal),
-              `Duplicate event id '${idVal}' (first defined at line ${eventIdMap.get(idVal) + 1}).`,
-              vscode.DiagnosticSeverity.Warning,
-            ),
-          );
-        } else {
-          eventIdMap.set(idVal, lineNo);
-        }
-
-        const refs = crossFileIdIndex?.events?.get(idVal) || [];
-        const currentFileNorm = path.resolve(filePath).toLowerCase();
-        const externalRefs = refs.filter(
-          (ref) => path.resolve(ref.filePath).toLowerCase() !== currentFileNorm,
-        );
-        if (externalRefs.length > 0) {
-          const firstRef = externalRefs[0];
-          const relPath = root
-            ? path.relative(root, firstRef.filePath).replace(/\\/g, "/")
-            : firstRef.filePath;
-          const suffix =
-            externalRefs.length > 1
-              ? ` (+${externalRefs.length - 1} more)`
-              : "";
-
-          diagnostics.push(
-            new vscode.Diagnostic(
-              rangeForValue(codeText, lineNo, idVal),
-              `Duplicate event id '${idVal}' also found in '${relPath}' (line ${firstRef.lineNo + 1})${suffix}.`,
-              vscode.DiagnosticSeverity.Warning,
-            ),
-          );
-        }
-      } else if (outerBlock === "decision") {
-        if (decisionIdMap.has(idVal)) {
-          diagnostics.push(
-            new vscode.Diagnostic(
-              rangeForValue(codeText, lineNo, idVal),
-              `Duplicate decision id '${idVal}' (first defined at line ${decisionIdMap.get(idVal) + 1}).`,
-              vscode.DiagnosticSeverity.Warning,
-            ),
-          );
-        } else {
-          decisionIdMap.set(idVal, lineNo);
-        }
-
-        const refs = crossFileIdIndex?.decisions?.get(idVal) || [];
-        const currentFileNorm = path.resolve(filePath).toLowerCase();
-        const externalRefs = refs.filter(
-          (ref) => path.resolve(ref.filePath).toLowerCase() !== currentFileNorm,
-        );
-        if (externalRefs.length > 0) {
-          const firstRef = externalRefs[0];
-          const relPath = root
-            ? path.relative(root, firstRef.filePath).replace(/\\/g, "/")
-            : firstRef.filePath;
-          const suffix =
-            externalRefs.length > 1
-              ? ` (+${externalRefs.length - 1} more)`
-              : "";
-
-          diagnostics.push(
-            new vscode.Diagnostic(
-              rangeForValue(codeText, lineNo, idVal),
-              `Duplicate decision id '${idVal}' also found in '${relPath}' (line ${firstRef.lineNo + 1})${suffix}.`,
+              rangeForValue(codeText, lineNo, value),
+              `Unknown religion '${value}'. Check Db/Religions/religions.txt.`,
               vscode.DiagnosticSeverity.Warning,
             ),
           );
         }
       }
-    }
 
-    // ── offset must be a positive integer ────────────────────────────────────
-    const offsetMatch = codeText.match(/\boffset\s*=\s*(-?[\d.]+)/);
-    if (offsetMatch) {
-      const raw = offsetMatch[1];
-      const num = Number(raw);
-      if (!Number.isInteger(num) || num < 0) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, raw),
-            `'offset' must be a non-negative integer, got '${raw}'.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
+      // ── type = religion ... which = X (same line or multi-line command block) ─
+      const cmdRelWhichSameLine = codeText.match(
+        /\btype\s*=\s*(religion|alt_provincereligion)\b[^\n\r}]*\bwhich\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
+      );
+      if (cmdRelWhichSameLine) {
+        const value = cmdRelWhichSameLine[2];
+        if (!religionSet.has(value.toLowerCase()) && religionSet.size > 0) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown religion '${value}'. Check Db/Religions/religions.txt.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      } else if (currentBlock === "command") {
+        // multi-line: which = X on a separate line
+        const cmdType = commandTypeByDepth.get(braceStack.length);
+        if (cmdType === "religion" || cmdType === "alt_provincereligion") {
+          const whichMatch = codeText.match(
+            /\bwhich\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
+          );
+          if (whichMatch) {
+            const value = whichMatch[1];
+            if (!religionSet.has(value.toLowerCase()) && religionSet.size > 0) {
+              diagnostics.push(
+                new vscode.Diagnostic(
+                  rangeForValue(codeText, lineNo, value),
+                  `Unknown religion '${value}'. Check Db/Religions/religions.txt.`,
+                  vscode.DiagnosticSeverity.Warning,
+                ),
+              );
+            }
+          }
+        }
+      }
+
+      // ── religion = X ──────────────────────────────────────────────────────────
+      const religionMatch = codeText.match(
+        /\breligion\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
+      );
+      if (religionMatch) {
+        const value = religionMatch[1];
+        if (!religionSet.has(value.toLowerCase())) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown religion '${value}'. Check Db/Religions/religions.txt.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      }
+
+      // ── references to event ids must exist (trigger/event/sleepevent) ─────────
+      if (isStructuredFtgFile && crossFileIdIndex) {
+        validateEventReferencesInLine(
+          diagnostics,
+          codeText,
+          lineNo,
+          currentBlock,
+          commandTypeByDepth,
+          braceStack.length,
+          crossFileIdIndex,
         );
       }
-    }
-    const countryTagTriggerMatch = codeText.match(
-      /\b(exists|tag|neighbour|overlord)\s*=\s*([A-Za-z0-9_]+)\b/i,
-    );
-    if (countryTagTriggerMatch) {
-      const field = countryTagTriggerMatch[1].toLowerCase();
-      const value = countryTagTriggerMatch[2];
-      const upper = value.toUpperCase();
-      const isNumSpecial = [
-        "-1",
-        "-2",
-        "-3",
-        "-4",
-        "-5",
-        "-6",
-        "-7",
-        "-9",
-      ].includes(value);
-      const isWordSpecial =
-        FTG_COUNTRY_SPECIAL_VALUES.includes(value) ||
-        FTG_COUNTRY_SPECIAL_VALUES.includes(upper.toLowerCase());
-      if (
-        COUNTRY_TAG_TRIGGER_FIELDS.has(field) &&
-        !isNumSpecial &&
-        !isWordSpecial &&
-        !countrySet.has(upper)
-      ) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, value),
-            `Unknown country tag '${value}' for trigger '${field}'.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
-        );
+
+      // ── type = domestic which = X ─────────────────────────────────────────────
+      const domesticMatch = codeText.match(
+        /\btype\s*=\s*domestic\b[^\n\r}]*\bwhich\s*=\s*([A-Za-z_]+)\b/i,
+      );
+      if (domesticMatch) {
+        const value = domesticMatch[1];
+        if (!domesticSet.has(value.toLowerCase())) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown domestic slider '${value}'.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      }
+
+      // ── type = relation which = TAG ───────────────────────────────────────────
+      const relationMatch = codeText.match(
+        /\btype\s*=\s*relation\b[^\n\r}]*\bwhich\s*=\s*([A-Za-z0-9_]+)\b/i,
+      );
+      if (relationMatch) {
+        const value = relationMatch[1];
+        const upper = value.toUpperCase();
+        const isSpecial =
+          FTG_COUNTRY_SPECIAL_VALUES.includes(value) ||
+          FTG_COUNTRY_SPECIAL_VALUES.includes(upper.toLowerCase());
+        if (!countrySet.has(upper) && !isSpecial) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown country tag '${value}' for relation.which.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      }
+
+      // ── type = addcore which = N ──────────────────────────────────────────────
+      const addcoreMatch = codeText.match(
+        /\btype\s*=\s*addcore\b[^\n\r}]*\bwhich\s*=\s*(-?\d+)\b/i,
+      );
+      if (addcoreMatch) {
+        const value = addcoreMatch[1];
+        const num = Number(value);
+        if (
+          Number.isFinite(num) &&
+          num > 0 &&
+          provinceMap &&
+          !provinceMap.has(String(num))
+        ) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown province id '${value}' for addcore.which.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      }
+
+      // ── action_X letter must be a-e ──────────────────────────────────────────
+      const actionLetterMatch = codeText.match(/\baction_([A-Za-z])\s*=/i);
+      if (actionLetterMatch) {
+        const letter = actionLetterMatch[1].toLowerCase();
+        if (!"abcde".includes(letter)) {
+          const badToken = `action_${actionLetterMatch[1]}`;
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, badToken),
+              `Invalid action name '${badToken}'. Only action_a through action_e are valid.`,
+              vscode.DiagnosticSeverity.Error,
+            ),
+          );
+        }
+      }
+
+      // ── id format + uniqueness (event/decision) ─────────────────────────────
+      const idFieldMatch = codeText.match(/^\s*id\s*=\s*(.+?)\s*$/i);
+      if (idFieldMatch) {
+        const rawIdValue = (idFieldMatch[1] || "").trim();
+        if (!/^\d+$/.test(rawIdValue)) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, rawIdValue || "id"),
+              `Invalid id value '${rawIdValue}'. Field 'id' must contain only digits.`,
+              vscode.DiagnosticSeverity.Error,
+            ),
+          );
+        }
+      }
+
+      const idMatch = codeText.match(/^\s*id\s*=\s*(\d+)\s*$/i);
+      if (idMatch) {
+        const idVal = idMatch[1];
+        const outerBlock = blockNameStack.length ? blockNameStack[0] : null;
+        if (outerBlock === "event") {
+          if (eventIdMap.has(idVal)) {
+            diagnostics.push(
+              new vscode.Diagnostic(
+                rangeForValue(codeText, lineNo, idVal),
+                `Duplicate event id '${idVal}' (first defined at line ${eventIdMap.get(idVal) + 1}).`,
+                vscode.DiagnosticSeverity.Warning,
+              ),
+            );
+          } else {
+            eventIdMap.set(idVal, lineNo);
+          }
+
+          const refs = crossFileIdIndex?.events?.get(idVal) || [];
+          const currentFileNorm = path.resolve(filePath).toLowerCase();
+          const externalRefs = refs.filter(
+            (ref) =>
+              path.resolve(ref.filePath).toLowerCase() !== currentFileNorm,
+          );
+          if (externalRefs.length > 0) {
+            const firstRef = externalRefs[0];
+            const relPath = root
+              ? path.relative(root, firstRef.filePath).replace(/\\/g, "/")
+              : firstRef.filePath;
+            const suffix =
+              externalRefs.length > 1
+                ? ` (+${externalRefs.length - 1} more)`
+                : "";
+
+            diagnostics.push(
+              new vscode.Diagnostic(
+                rangeForValue(codeText, lineNo, idVal),
+                `Duplicate event id '${idVal}' also found in '${relPath}' (line ${firstRef.lineNo + 1})${suffix}.`,
+                vscode.DiagnosticSeverity.Warning,
+              ),
+            );
+          }
+        } else if (outerBlock === "decision") {
+          if (decisionIdMap.has(idVal)) {
+            diagnostics.push(
+              new vscode.Diagnostic(
+                rangeForValue(codeText, lineNo, idVal),
+                `Duplicate decision id '${idVal}' (first defined at line ${decisionIdMap.get(idVal) + 1}).`,
+                vscode.DiagnosticSeverity.Warning,
+              ),
+            );
+          } else {
+            decisionIdMap.set(idVal, lineNo);
+          }
+
+          const refs = crossFileIdIndex?.decisions?.get(idVal) || [];
+          const currentFileNorm = path.resolve(filePath).toLowerCase();
+          const externalRefs = refs.filter(
+            (ref) =>
+              path.resolve(ref.filePath).toLowerCase() !== currentFileNorm,
+          );
+          if (externalRefs.length > 0) {
+            const firstRef = externalRefs[0];
+            const relPath = root
+              ? path.relative(root, firstRef.filePath).replace(/\\/g, "/")
+              : firstRef.filePath;
+            const suffix =
+              externalRefs.length > 1
+                ? ` (+${externalRefs.length - 1} more)`
+                : "";
+
+            diagnostics.push(
+              new vscode.Diagnostic(
+                rangeForValue(codeText, lineNo, idVal),
+                `Duplicate decision id '${idVal}' also found in '${relPath}' (line ${firstRef.lineNo + 1})${suffix}.`,
+                vscode.DiagnosticSeverity.Warning,
+              ),
+            );
+          }
+        }
+      }
+
+      // ── offset must be a positive integer ────────────────────────────────────
+      const offsetMatch = codeText.match(/\boffset\s*=\s*(-?[\d.]+)/);
+      if (offsetMatch) {
+        const raw = offsetMatch[1];
+        const num = Number(raw);
+        if (!Number.isInteger(num) || num < 0) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, raw),
+              `'offset' must be a non-negative integer, got '${raw}'.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      }
+      const countryTagTriggerMatch = codeText.match(
+        /\b(exists|tag|neighbour|overlord)\s*=\s*([A-Za-z0-9_]+)\b/i,
+      );
+      if (countryTagTriggerMatch) {
+        const field = countryTagTriggerMatch[1].toLowerCase();
+        const value = countryTagTriggerMatch[2];
+        const upper = value.toUpperCase();
+        const isNumSpecial = [
+          "-1",
+          "-2",
+          "-3",
+          "-4",
+          "-5",
+          "-6",
+          "-7",
+          "-9",
+        ].includes(value);
+        const isWordSpecial =
+          FTG_COUNTRY_SPECIAL_VALUES.includes(value) ||
+          FTG_COUNTRY_SPECIAL_VALUES.includes(upper.toLowerCase());
+        if (
+          COUNTRY_TAG_TRIGGER_FIELDS.has(field) &&
+          !isNumSpecial &&
+          !isWordSpecial &&
+          !countrySet.has(upper)
+        ) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown country tag '${value}' for trigger '${field}'.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      }
+
+      // ── trigger: country = TAG (in sub-blocks: alliance/vassal/war/...) ───────
+      const countryFieldMatch = codeText.match(
+        /\bcountry\s*=\s*([A-Za-z0-9_]+)\b/i,
+      );
+      if (countryFieldMatch) {
+        const value = countryFieldMatch[1];
+        const upper = value.toUpperCase();
+        const isNumSpecial = [
+          "-1",
+          "-2",
+          "-3",
+          "-4",
+          "-5",
+          "-6",
+          "-7",
+          "-9",
+        ].includes(value);
+        const isWordSpecial =
+          FTG_COUNTRY_SPECIAL_VALUES.includes(value) ||
+          FTG_COUNTRY_SPECIAL_VALUES.includes(upper.toLowerCase());
+        if (!isNumSpecial && !isWordSpecial && !countrySet.has(upper)) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown country tag '${value}' for 'country'.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      }
+
+      // ── trigger: owned/control = N ────────────────────────────────────────────
+      const provinceTriggerMatch = codeText.match(
+        /\b(owned|control)\s*=\s*(-?\d+)\b/i,
+      );
+      if (provinceTriggerMatch) {
+        const field = provinceTriggerMatch[1];
+        const value = provinceTriggerMatch[2];
+        const num = Number(value);
+        if (
+          Number.isFinite(num) &&
+          num > 0 &&
+          provinceMap &&
+          !provinceMap.has(String(num))
+        ) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown province id '${value}' for trigger '${field}'.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      }
+
+      // ── trigger: yes/no boolean fields ───────────────────────────────────────
+      const boolFieldMatch = codeText.match(
+        /\b(atwar|isvassal|elector|emperor|hre|bankrupt|revolt|occupied|city)\s*=\s*([A-Za-z0-9_]+)\b/i,
+      );
+      if (boolFieldMatch) {
+        const value = boolFieldMatch[2].toLowerCase();
+        if (value !== "yes" && value !== "no") {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, boolFieldMatch[2]),
+              `Field '${boolFieldMatch[1]}' expects 'yes' or 'no', got '${boolFieldMatch[2]}'.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      }
+
+      // ── trigger: data = X inside provincereligion / provinceculture blocks ────
+      const dataMatch = codeText.match(
+        /\bdata\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
+      );
+      if (dataMatch && currentBlock) {
+        const value = dataMatch[1];
+        if (
+          (currentBlock === "provincereligion" ||
+            currentBlock === "changeprovinceculture") &&
+          !religionSet.has(value.toLowerCase()) &&
+          religionSet.size > 0
+        ) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown religion '${value}' for '${currentBlock}.data'.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        } else if (
+          (currentBlock === "provinceculture" ||
+            currentBlock === "cityculture") &&
+          !cultureSet.has(value.toLowerCase()) &&
+          cultureSet.size > 0
+        ) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown culture '${value}' for '${currentBlock}.data'.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      }
+
+      // ── single-line: provincereligion = { data = X } ─────────────────────────
+      const inlineProvRelMatch = codeText.match(
+        /\bprovincereligion\s*=\s*\{[^}]*\bdata\s*=\s*([A-Za-z_][A-Za-z0-9_]*)/i,
+      );
+      if (inlineProvRelMatch) {
+        const value = inlineProvRelMatch[1];
+        if (!religionSet.has(value.toLowerCase()) && religionSet.size > 0) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown religion '${value}' for provincereligion.data.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      }
+
+      // ── single-line: provinceculture = { data = X } ──────────────────────────
+      const inlineProvCulMatch = codeText.match(
+        /\bprovince(?:culture|cityculture)\s*=\s*\{[^}]*\bdata\s*=\s*([A-Za-z_][A-Za-z0-9_]*)/i,
+      );
+      if (inlineProvCulMatch) {
+        const value = inlineProvCulMatch[1];
+        if (!cultureSet.has(value.toLowerCase()) && cultureSet.size > 0) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown culture '${value}' for provinceculture.data.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
       }
     }
 
-    // ── trigger: country = TAG (in sub-blocks: alliance/vassal/war/...) ───────
-    const countryFieldMatch = codeText.match(
-      /\bcountry\s*=\s*([A-Za-z0-9_]+)\b/i,
-    );
-    if (countryFieldMatch) {
-      const value = countryFieldMatch[1];
-      const upper = value.toUpperCase();
-      const isNumSpecial = [
-        "-1",
-        "-2",
-        "-3",
-        "-4",
-        "-5",
-        "-6",
-        "-7",
-        "-9",
-      ].includes(value);
-      const isWordSpecial =
-        FTG_COUNTRY_SPECIAL_VALUES.includes(value) ||
-        FTG_COUNTRY_SPECIAL_VALUES.includes(upper.toLowerCase());
-      if (!isNumSpecial && !isWordSpecial && !countrySet.has(upper)) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, value),
-            `Unknown country tag '${value}' for 'country'.`,
-            vscode.DiagnosticSeverity.Warning,
+    for (const openBrace of braceStack) {
+      diagnostics.push(
+        new vscode.Diagnostic(
+          new vscode.Range(
+            openBrace.lineNo,
+            openBrace.charNo,
+            openBrace.lineNo,
+            openBrace.charNo + 1,
           ),
-        );
-      }
-    }
-
-    // ── trigger: owned/control = N ────────────────────────────────────────────
-    const provinceTriggerMatch = codeText.match(
-      /\b(owned|control)\s*=\s*(-?\d+)\b/i,
-    );
-    if (provinceTriggerMatch) {
-      const field = provinceTriggerMatch[1];
-      const value = provinceTriggerMatch[2];
-      const num = Number(value);
-      if (
-        Number.isFinite(num) &&
-        num > 0 &&
-        provinceMap &&
-        !provinceMap.has(String(num))
-      ) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, value),
-            `Unknown province id '${value}' for trigger '${field}'.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
-        );
-      }
-    }
-
-    // ── trigger: yes/no boolean fields ───────────────────────────────────────
-    const boolFieldMatch = codeText.match(
-      /\b(atwar|isvassal|elector|emperor|hre|bankrupt|revolt|occupied|city)\s*=\s*([A-Za-z0-9_]+)\b/i,
-    );
-    if (boolFieldMatch) {
-      const value = boolFieldMatch[2].toLowerCase();
-      if (value !== "yes" && value !== "no") {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, boolFieldMatch[2]),
-            `Field '${boolFieldMatch[1]}' expects 'yes' or 'no', got '${boolFieldMatch[2]}'.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
-        );
-      }
-    }
-
-    // ── trigger: data = X inside provincereligion / provinceculture blocks ────
-    const dataMatch = codeText.match(
-      /\bdata\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
-    );
-    if (dataMatch && currentBlock) {
-      const value = dataMatch[1];
-      if (
-        (currentBlock === "provincereligion" ||
-          currentBlock === "changeprovinceculture") &&
-        !religionSet.has(value.toLowerCase()) &&
-        religionSet.size > 0
-      ) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, value),
-            `Unknown religion '${value}' for '${currentBlock}.data'.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
-        );
-      } else if (
-        (currentBlock === "provinceculture" ||
-          currentBlock === "cityculture") &&
-        !cultureSet.has(value.toLowerCase()) &&
-        cultureSet.size > 0
-      ) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, value),
-            `Unknown culture '${value}' for '${currentBlock}.data'.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
-        );
-      }
-    }
-
-    // ── single-line: provincereligion = { data = X } ─────────────────────────
-    const inlineProvRelMatch = codeText.match(
-      /\bprovincereligion\s*=\s*\{[^}]*\bdata\s*=\s*([A-Za-z_][A-Za-z0-9_]*)/i,
-    );
-    if (inlineProvRelMatch) {
-      const value = inlineProvRelMatch[1];
-      if (!religionSet.has(value.toLowerCase()) && religionSet.size > 0) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, value),
-            `Unknown religion '${value}' for provincereligion.data.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
-        );
-      }
-    }
-
-    // ── single-line: provinceculture = { data = X } ──────────────────────────
-    const inlineProvCulMatch = codeText.match(
-      /\bprovince(?:culture|cityculture)\s*=\s*\{[^}]*\bdata\s*=\s*([A-Za-z_][A-Za-z0-9_]*)/i,
-    );
-    if (inlineProvCulMatch) {
-      const value = inlineProvCulMatch[1];
-      if (!cultureSet.has(value.toLowerCase()) && cultureSet.size > 0) {
-        diagnostics.push(
-          new vscode.Diagnostic(
-            rangeForValue(codeText, lineNo, value),
-            `Unknown culture '${value}' for provinceculture.data.`,
-            vscode.DiagnosticSeverity.Warning,
-          ),
-        );
-      }
-    }
-  }
-
-  for (const openBrace of braceStack) {
-    diagnostics.push(
-      new vscode.Diagnostic(
-        new vscode.Range(
-          openBrace.lineNo,
-          openBrace.charNo,
-          openBrace.lineNo,
-          openBrace.charNo + 1,
+          "Opening brace '{' is not closed.",
+          vscode.DiagnosticSeverity.Error,
         ),
-        "Opening brace '{' is not closed.",
-        vscode.DiagnosticSeverity.Error,
-      ),
-    );
-  }
+      );
+    }
 
-  return diagnostics;
+    return diagnostics;
   } catch (error) {
     const message =
       error && error.message
@@ -4225,12 +5513,30 @@ function provideFtgCompletionItems(document, position) {
 
   if (/\bwhich\s*=\s*"?[A-Za-z0-9_\-]*"?$/.test(codePrefix)) {
     const type = extractCommandType(codePrefix);
+    const root = getWorkspaceRoot(document);
+    const wordRange = document.getWordRangeAtPosition(
+      position,
+      /[A-Za-z0-9_\-]+/,
+    );
+
+    if (type && FTG_PROVINCE_TARGET_TYPES.has(type) && root) {
+      const catalog = getProvinceCatalog(root);
+      const provinceItems = createProvinceCompletionItems(catalog, wordRange);
+      const specialItems = createCompletionItems(
+        FTG_PROVINCE_SPECIAL_VALUES,
+        vscode.CompletionItemKind.Value,
+        `FTG which value for ${type}`,
+        wordRange,
+      );
+      return [
+        createCascadePickerCompletionItem(wordRange),
+        ...provinceItems,
+        ...specialItems,
+      ];
+    }
+
     const suggestions = getWhichSuggestions(type, completionData);
     if (suggestions.length) {
-      const wordRange = document.getWordRangeAtPosition(
-        position,
-        /[A-Za-z0-9_\-]+/,
-      );
       return createCompletionItems(
         suggestions,
         vscode.CompletionItemKind.Value,
@@ -4243,12 +5549,20 @@ function provideFtgCompletionItems(document, position) {
 
   if (/\bvalue\s*=\s*"?[A-Za-z0-9_\-]*"?$/.test(codePrefix)) {
     const type = extractCommandType(codePrefix);
+    const root = getWorkspaceRoot(document);
+    const wordRange = document.getWordRangeAtPosition(
+      position,
+      /[A-Za-z0-9_\-]+/,
+    );
+
+    if (type && PROVINCE_VALUE_TYPES.has(type) && root) {
+      const catalog = getProvinceCatalog(root);
+      const provinceItems = createProvinceCompletionItems(catalog, wordRange);
+      return [createCascadePickerCompletionItem(wordRange), ...provinceItems];
+    }
+
     const suggestions = getValueSuggestions(type, completionData);
     if (suggestions.length) {
-      const wordRange = document.getWordRangeAtPosition(
-        position,
-        /[A-Za-z0-9_\-]+/,
-      );
       return createCompletionItems(
         suggestions,
         vscode.CompletionItemKind.Value,
@@ -4268,7 +5582,237 @@ function provideFtgCompletionItems(document, position) {
     return [item];
   }
 
+  if (/\bprovince\s*=\s*"?[A-Za-z0-9_\-]*"?$/.test(codePrefix)) {
+    const root = getWorkspaceRoot(document);
+    if (root) {
+      const catalog = getProvinceCatalog(root);
+      const wordRange = document.getWordRangeAtPosition(
+        position,
+        /[A-Za-z0-9_\-]+/,
+      );
+      const provinceItems = createProvinceCompletionItems(catalog, wordRange);
+      return [createCascadePickerCompletionItem(wordRange), ...provinceItems];
+    }
+  }
+
   return undefined;
+}
+
+function extractCommandTypeAroundPosition(document, position) {
+  const thisLineCode = document.lineAt(position.line).text.split("#")[0];
+  const directType = extractCommandType(thisLineCode);
+  if (directType) {
+    return directType;
+  }
+
+  const maxLookaround = 12;
+
+  for (
+    let lineNo = position.line - 1;
+    lineNo >= 0 && lineNo >= position.line - maxLookaround;
+    lineNo -= 1
+  ) {
+    const code = document.lineAt(lineNo).text.split("#")[0];
+    if (!code.trim()) {
+      continue;
+    }
+
+    const type = extractCommandType(code);
+    if (type) {
+      return type;
+    }
+
+    if (/\bcommand\s*=\s*\{/.test(code)) {
+      break;
+    }
+    if (/\}/.test(code)) {
+      break;
+    }
+  }
+
+  return undefined;
+}
+
+function findAssignmentRangeInLine(lineText, field) {
+  const assignRe = new RegExp(`\\b${field}\\s*=\\s*([^\\s#}]+)?`, "i");
+  const match = assignRe.exec(lineText);
+  if (!match) {
+    return undefined;
+  }
+
+  if (match[1]) {
+    const start = match.index + match[0].lastIndexOf(match[1]);
+    return {
+      start,
+      end: start + match[1].length,
+    };
+  }
+
+  return {
+    start: match.index + match[0].length,
+    end: match.index + match[0].length,
+  };
+}
+
+function getProvinceInsertTarget(document, position) {
+  const lineText = document.lineAt(position.line).text;
+  const codeLine = lineText.split("#")[0];
+  if (!codeLine.trim()) {
+    return undefined;
+  }
+
+  const commandType = extractCommandTypeAroundPosition(document, position);
+
+  const provinceRange = findAssignmentRangeInLine(codeLine, "province");
+  if (provinceRange) {
+    return {
+      field: "province",
+      range: new vscode.Range(
+        position.line,
+        provinceRange.start,
+        position.line,
+        provinceRange.end,
+      ),
+      commandType,
+    };
+  }
+
+  const whichRange = findAssignmentRangeInLine(codeLine, "which");
+  if (whichRange && commandType && FTG_PROVINCE_TARGET_TYPES.has(commandType)) {
+    return {
+      field: "which",
+      range: new vscode.Range(
+        position.line,
+        whichRange.start,
+        position.line,
+        whichRange.end,
+      ),
+      commandType,
+    };
+  }
+
+  const valueRange = findAssignmentRangeInLine(codeLine, "value");
+  if (valueRange && commandType && PROVINCE_VALUE_TYPES.has(commandType)) {
+    return {
+      field: "value",
+      range: new vscode.Range(
+        position.line,
+        valueRange.start,
+        position.line,
+        valueRange.end,
+      ),
+      commandType,
+    };
+  }
+
+  return undefined;
+}
+
+async function pickProvinceFromCascade(catalog) {
+  const continents = [...new Set(catalog.map((item) => item.continent))].sort(
+    (a, b) => a.localeCompare(b),
+  );
+  const continent = await vscode.window.showQuickPick(continents, {
+    placeHolder: "FTG: wybierz kontynent",
+    ignoreFocusOut: true,
+  });
+  if (!continent) {
+    return undefined;
+  }
+
+  const byContinent = catalog.filter((item) => item.continent === continent);
+  const regions = [...new Set(byContinent.map((item) => item.region))].sort(
+    (a, b) => a.localeCompare(b),
+  );
+  const region = await vscode.window.showQuickPick(regions, {
+    placeHolder: `FTG: wybierz region (${continent})`,
+    ignoreFocusOut: true,
+  });
+  if (!region) {
+    return undefined;
+  }
+
+  const byRegion = byContinent.filter((item) => item.region === region);
+  const areas = [...new Set(byRegion.map((item) => item.area))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const area = await vscode.window.showQuickPick(areas, {
+    placeHolder: `FTG: wybierz area (${region})`,
+    ignoreFocusOut: true,
+  });
+  if (!area) {
+    return undefined;
+  }
+
+  const byArea = byRegion.filter((item) => item.area === area);
+  const provinceChoices = byArea.map((item) => ({
+    label: `${item.name} (${item.id})`,
+    description: `${item.continent} / ${item.region} / ${item.area}`,
+    province: item,
+  }));
+
+  const pickedProvince = await vscode.window.showQuickPick(provinceChoices, {
+    placeHolder: `FTG: wybierz prowincj? (${area})`,
+    matchOnDescription: true,
+    ignoreFocusOut: true,
+  });
+
+  return pickedProvince ? pickedProvince.province : undefined;
+}
+
+async function insertProvinceIdFromCascade() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showErrorMessage("FTG Toolkit: brak aktywnego edytora.");
+    return;
+  }
+
+  const root = getWorkspaceRoot(editor.document);
+  if (!root) {
+    vscode.window.showErrorMessage(
+      "FTG Toolkit: nie znaleziono katalogu workspace.",
+    );
+    return;
+  }
+
+  const target = getProvinceInsertTarget(
+    editor.document,
+    editor.selection.active,
+  );
+  if (!target) {
+    vscode.window.showInformationMessage(
+      "FTG Toolkit: ustaw kursor w polu province/which/value, kt�re oczekuje ID prowincji.",
+    );
+    return;
+  }
+
+  const catalog = getProvinceCatalog(root);
+  if (!catalog?.length) {
+    vscode.window.showErrorMessage(
+      "FTG Toolkit: nie znaleziono poprawnej listy prowincji (provinces.txt).",
+    );
+    return;
+  }
+
+  const province = await pickProvinceFromCascade(catalog);
+  if (!province) {
+    return;
+  }
+
+  const inserted = await editor.edit((builder) => {
+    builder.replace(target.range, province.id);
+  });
+
+  if (!inserted) {
+    vscode.window.showErrorMessage(
+      "FTG Toolkit: nie uda?o si? wstawi? ID prowincji.",
+    );
+    return;
+  }
+
+  vscode.window.showInformationMessage(
+    `FTG Toolkit: wstawiono prowincj? ${province.name} (${province.id}).`,
+  );
 }
 
 class FtgRefsCodeLensProvider {
@@ -4286,6 +5830,18 @@ class FtgRefsCodeLensProvider {
       const text = document.lineAt(i).text;
       if (text.trimStart().startsWith("#")) {
         continue;
+      }
+
+      const code = text.split("#")[0];
+      if (/^\s*decision\s*=\s*\{/i.test(code)) {
+        const range = new vscode.Range(i, 0, i, Math.max(text.length, 1));
+        lenses.push(
+          new vscode.CodeLens(range, {
+            title: "Localize decision (inline)",
+            command: "ftgRefs.localizeDecisionFromCursor",
+            arguments: [document.uri, i],
+          }),
+        );
       }
 
       const commandEventRefs = parseCommandEventReferencesInLine(text);
@@ -4366,6 +5922,12 @@ function activate(context) {
 
   refreshOpenValidations();
 
+  setTimeout(() => {
+    for (const editor of vscode.window.visibleTextEditors) {
+      ensureWindows1252Encoding(editor.document);
+    }
+  }, 0);
+
   context.subscriptions.push(
     vscode.languages.registerCodeLensProvider(selector, provider),
   );
@@ -4413,7 +5975,16 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument((document) => {
+      ensureWindows1252Encoding(document);
       refreshValidation(document);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (editor) {
+        ensureWindows1252Encoding(editor.document);
+      }
     }),
   );
 
@@ -4439,9 +6010,11 @@ function activate(context) {
 
         let provinceMap;
         let lookups;
+        let localizationMap;
         try {
           provinceMap = getProvinceMap(root);
           lookups = getDbLookups(root);
+          localizationMap = getEnglishLocalizationMap(root);
         } catch {
           return [];
         }
@@ -4497,6 +6070,14 @@ function activate(context) {
             lineTargets.push(item);
           }
 
+          const localizationTargets = parseLocalizationKeysInLine(
+            codeText,
+            lineNo,
+          );
+          for (const item of localizationTargets) {
+            lineTargets.push(item);
+          }
+
           for (const item of lineTargets) {
             let label;
 
@@ -4528,6 +6109,11 @@ function activate(context) {
               label = countryName
                 ? `  ⟶ country: ${countryName}`
                 : `  ⟶ [unknown country ${item.id}]`;
+            } else if (item.kind === "localization") {
+              const localizedValue = localizationMap?.get(item.id);
+              label = localizedValue
+                ? `  ⟶ ${item.field}: ${truncateInlayText(localizedValue)}`
+                : `  ⟶ [missing loc ${item.id}]`;
             }
 
             if (!label) {
@@ -4552,6 +6138,14 @@ function activate(context) {
   context.subscriptions.push(
     vscode.languages.registerDefinitionProvider(selector, {
       provideDefinition: async (document, position) => {
+        const localizationTarget = await resolveLocalizationJumpTarget(
+          document,
+          position,
+        );
+        if (localizationTarget) {
+          return [localizationTarget];
+        }
+
         const parsed = parseSymbolAtPosition(document, position);
         if (!parsed) {
           return undefined;
@@ -4677,6 +6271,42 @@ function activate(context) {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "ftgRefs.localizeEventFromCursor",
+      async () => {
+        await localizeEventFromCursor();
+      },
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "ftgRefs.localizeDecisionFromCursor",
+      async () => {
+        await localizeDecisionFromCursor();
+      },
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "ftgRefs.insertProvinceIdFromCascade",
+      async () => {
+        await insertProvinceIdFromCascade();
+      },
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "ftgRefs.jumpBetweenSourceAndLocalization",
+      async () => {
+        await jumpBetweenSourceAndLocalizationFromCursor();
+      },
+    ),
+  );
+
+  context.subscriptions.push(
     vscode.languages.registerHoverProvider(selector, {
       provideHover: provideFtgHover,
     }),
@@ -4704,6 +6334,17 @@ function provideFtgHover(document, position) {
     return null;
   }
   const word = document.getText(wordRange);
+
+  const localizationHover = provideLocalizationKeyHover(
+    document,
+    code,
+    word,
+    wordRange,
+  );
+  if (localizationHover) {
+    return localizationHover;
+  }
+
   const key = word.toLowerCase();
 
   // Also check action_X pattern
@@ -4729,6 +6370,75 @@ function provideFtgHover(document, position) {
   const md = new vscode.MarkdownString(FTG_HOVER_DOCS[lookupKey]);
   md.isTrusted = true;
   return new vscode.Hover(md, actionWord ? actionRange : wordRange);
+}
+
+function provideLocalizationKeyHover(document, code, word, wordRange) {
+  if (!word || !wordRange) {
+    return null;
+  }
+
+  const assigned = parseQuotedNameDescAtPosition(
+    code,
+    wordRange.start.character,
+    wordRange.end.character,
+  );
+  if (!assigned || assigned.key !== word) {
+    return null;
+  }
+
+  const root = getWorkspaceRoot(document);
+  if (!root) {
+    return null;
+  }
+
+  const localizationMap = getEnglishLocalizationMap(root);
+  const localizedValue = localizationMap.get(assigned.key);
+  if (!localizedValue) {
+    return null;
+  }
+
+  const { text: shortValue, truncated } = truncateHoverText(localizedValue);
+  const truncatedInfo = truncated ? "\n\n_...obcięto podgląd_" : "";
+  const md = new vscode.MarkdownString(
+    `**localisation (${assigned.field})**\n\n**key:** \`${assigned.key}\`\n\n**value:** ${escapeMarkdownForHover(shortValue)}${truncatedInfo}`,
+  );
+  md.isTrusted = true;
+  return new vscode.Hover(md, wordRange);
+}
+
+function parseQuotedNameDescAtPosition(code, startChar, endChar) {
+  const assignRe = /\b(name|desc)\s*=\s*"([^"]+)"/gi;
+  let match = assignRe.exec(code);
+  while (match) {
+    const key = match[2];
+    const keyStart = match.index + match[0].lastIndexOf(key);
+    const keyEnd = keyStart + key.length;
+    if (startChar >= keyStart && endChar <= keyEnd) {
+      return {
+        field: (match[1] || "").toLowerCase(),
+        key,
+      };
+    }
+    match = assignRe.exec(code);
+  }
+
+  return undefined;
+}
+
+function truncateHoverText(value, maxLength = 700) {
+  const normalized = (value || "").replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return { text: normalized, truncated: false };
+  }
+
+  return {
+    text: `${normalized.slice(0, maxLength)}…`,
+    truncated: true,
+  };
+}
+
+function escapeMarkdownForHover(value) {
+  return (value || "").replace(/[\\`*_{}\[\]()#+\-.!]/g, "\\$&");
 }
 
 function parseAssignedValueAtPosition(code, startChar, endChar) {

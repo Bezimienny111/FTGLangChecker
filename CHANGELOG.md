@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.7
+- Navigation: added bidirectional jump between source and localization with `FTG: Jump Source <-> Localization` (`Ctrl+Alt+Shift+J`), available via context menu and Command Palette.
+- Navigation: `F12` on localization keys (`EVENTNAME`, `EVENTHIST`, `ACTIONNAME`, `DECISIONNAME`, `DECISIONHIST`) now jumps directly to source definitions or localization entries depending on current file.
+- Decisions localization: added `FTG: Localize Current Decision` (`Ctrl+Alt+Shift+D`) with automatic key generation (`DECISIONNAME<ID>`, `DECISIONHIST<ID>`) and append to `Localisation/English/decisions.csv`.
+- CodeLens: added one-click `Localize decision (inline)` above `decision = {` blocks.
+- Province workflow: added in-place province ID completion menu (`name + id`) for `province`, province-target `which`, and province-target `value`, plus cascade picker integration.
+- Validation: added missing-event checks for `event = ID` and `type = trigger|sleepevent which = ID` references.
+- UX/robustness: improved localization jump behavior when cursor is inside event/decision blocks and added fallback opening of target localization file when key entry is missing.
+
 ## 0.3.2
 - Validation: cross-file duplicate ID detection for `event` and `decision` definitions across `Db/Events` and `Db/Decisions`.
 - Validation: fixed false positive on valid command assignment chains (e.g. `type = relation which = TAG value = N`) that were incorrectly reported as trailing garbage.

@@ -1,0 +1,784 @@
+FTG REFS / SYNTAX - GOTOWE FUNKCJONALNOŚCI
+=========================================
+
+Cel pliku
+---------
+Ten plik ma być czytany PRZED dodawaniem kolejnych funkcji do składni / hintów / referencji,
+żeby nie dublować już wykonanej pracy.
+
+Źródło prawdy
+-------------
+Plik źródłowy rozszerzenia:
+- Work Folder/ftg-refs-codelens/extension.js
+- Work Folder/ftg-refs-codelens/syntaxes/ftg.tmLanguage.json
+
+Aktywna zainstalowana kopia używana przez VS Code:
+- C:\Users\Bezi\.vscode\extensions\local.ftg-refs-codelens-0.3.0\
+
+Po zmianach w źródle trzeba kopiować zmodyfikowane pliki do aktywnego rozszerzenia i zrobić:
+- Developer: Reload Window
+
+
+FUNKCJE DODANE W TEJ SESJI
+=========================
+
+1. POPRAWIONE PODŚWIETLANIE BLOKÓW LOGICZNYCH
+-------------------------------------------
+Status: GOTOWE
+Zakres:
+- AND = { ... }
+- OR = { ... }
+- NOT = { ... }
+- someof = { ... }
+
+Co dodano:
+- osobną regułę logicalBlocks
+- rekursywne parsowanie zawartości bloków logicznych
+- pełne include reguł wewnątrz NOT/AND/OR/someof
+- dodatkową regułę bracedExpression do zagnieżdżonych bloków { ... }
+
+Po co:
+- żeby wnętrze bloków logicznych nie traciło podświetlania
+- żeby zagnieżdżone warunki działały poprawnie
+
+Plik:
+- Work Folder/ftg-refs-codelens/syntaxes/ftg.tmLanguage.json
+
+
+2. POPRAWKA KONFLIKTU Z decisionhistory / TAGAMI
+-----------------------------------------------
+Status: GOTOWE
+
+Co poprawiono:
+- regex dla decisionhistory nie traktuje już NOT i AND jak 3-literowych tagów państw
+
+Po co:
+- wcześniejszy wzorzec potrafił "pożreć" blok i psuć tokenizację wewnątrz triggerów
+
+Efekt:
+- mniejsze ryzyko psucia kolorowania przy NOT / AND w pobliżu decisionhistory
+
+Plik:
+- Work Folder/ftg-refs-codelens/syntaxes/ftg.tmLanguage.json
+
+
+3. USUNIĘCIE PROBLEMATYCZNYCH RULEK BLOKOWYCH ID Z AKTYWNEGO FLOW
+----------------------------------------------------------------
+Status: GOTOWE
+
+Co zrobiono:
+- eventDefinitionIds i decisionDefinitionIds nie są już włączone do głównej listy patterns
+
+Po co:
+- te reguły potrafiły zakłócać parsowanie wnętrza bloków trigger / decision
+
+Uwagi:
+- definicje mogą nadal istnieć w repository, ale nie są aktywnie include'owane na top-level
+
+Plik:
+- Work Folder/ftg-refs-codelens/syntaxes/ftg.tmLanguage.json
+
+
+4. INLAY HINTS DLA TAGÓW PAŃSTW
+-------------------------------
+Status: GOTOWE
+
+Co działa:
+- country = BYZ                -> hint: country: Byzantium
+- exists = TUR                -> hint nazwy kraju
+- tag = ATH                   -> hint nazwy kraju
+- neighbour = VEN             -> hint nazwy kraju
+- overlord = HAB              -> hint nazwy kraju
+- command = { type = relation which = FRA value = ... } -> hint nazwy kraju przy which = TAG
+  (dla komend, w których which oznacza kraj)
+
+Co dodano technicznie:
+- regexy do rozpoznawania tagów państw w liniach
+- parseCountryTagsInLine()
+- countries map w buildDbLookups()
+- ładowanie nazw krajów z danych / lokalizacji
+- render hintów kind = country w providerze inlay hints
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+Uwaga:
+- TEJ funkcji nie dodawać ponownie
+- jeśli rozwijać dalej, to rozszerzać tylko o nowe konteksty wykrywania tagów
+
+
+5. PODŚWIETLANIE SUWAKÓW DOMESTIC
+---------------------------------
+Status: GOTOWE
+
+Dodane wartości:
+- ARISTOCRACY
+- CENTRALIZATION
+- INNOVATIVE
+- MERCANTILISM
+- LAND
+- OFFENSIVE
+- QUALITY
+- SERFDOM
+
+Co zrobiono:
+- osobna reguła domesticSliders w gramatyce
+- dołączona do głównego patterns[]
+
+Po co:
+- żeby np. CENTRALIZATION było kolorowane jako rozpoznawalna wartość FTG
+
+Plik:
+- Work Folder/ftg-refs-codelens/syntaxes/ftg.tmLanguage.json
+
+Uwaga:
+- CENTRALIZATION jest już naprawione i wdrożone
+
+
+6. PODŚWIETLANIE FLAG W TRIGGERACH I COMMANDACH
+-----------------------------------------------
+Status: GOTOWE
+
+Co działa:
+- flag = orientalrevolt
+- type = setflag which = orientalrevolt
+- type = clrflag which = orientalrevolt
+
+Co poprawiono:
+- reguła dla setflag / clrflag została naprawiona do faktycznej składni FTG
+- wcześniej regex próbował dopasować zły układ
+
+Scope flagi:
+- variable.other.flag.ftg
+
+Plik:
+- Work Folder/ftg-refs-codelens/syntaxes/ftg.tmLanguage.json
+
+Uwaga:
+- samo podświetlanie flag jest już zrobione
+- ewentualne przyszłe rozwinięcie: hinty / referencje flag w większej liczbie kontekstów
+
+
+7. WYŁĄCZENIE SEMANTIC HIGHLIGHTING DLA FTG
+-------------------------------------------
+Status: GOTOWE
+
+Co zrobiono:
+- ustawiono dla języka ftg:
+  editor.semanticHighlighting.enabled = false
+
+Po co:
+- żeby TextMate grammar miała pełną kontrolę nad kolorowaniem
+- żeby nie mieszało się to z semantycznym kolorowaniem VS Code
+
+Plik:
+- .vscode/settings.json
+
+
+8. PORZĄDEK W ŚRODOWISKU VS CODE
+--------------------------------
+Status: GOTOWE OPERACYJNIE
+
+Co zrobiono poza plikami źródłowymi:
+- wykryto, że VS Code używa zainstalowanego rozszerzenia z katalogu użytkownika, a nie samych plików z workspace
+- skopiowano poprawki do aktywnego rozszerzenia local.ftg-refs-codelens-0.3.0
+- usunięto konflikty z innymi rozszerzeniami składni FTG / Paradox
+
+Po co:
+- żeby działała tylko jedna aktywna gramatyka
+- żeby poprawki były faktycznie widoczne w edytorze
+
+Uwaga:
+- to nie jest funkcja użytkowa, ale ważna informacja techniczna
+
+
+9. INLAY HINTS DLA PROWINCJI
+----------------------------
+Status: GOTOWE
+
+Co działa:
+- province = 357                        -> hint z nazwą prowincji
+- owned = { province = 357 data = BYZ } -> hint z nazwą prowincji
+- control = { province = 357 data = BYZ } -> hint z nazwą prowincji
+- command = { type = capital which = 357 } -> hint z nazwą prowincji
+- commandy, w których which = province id, też dostają hint
+- commandy, w których value = province id (np. cedeprovince / secedeprovince), też dostają hint
+
+Co dodano technicznie:
+- parseProvinceIdsInLine()
+- parseCommandWhichTargetsInLine()
+- getProvinceMap()
+- mapowanie ID prowincji na nazwy z danych moda
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+10. INLAY HINTS DLA EVENT ID / MONARCH ID / LEADER ID
+-----------------------------------------------------
+Status: GOTOWE
+
+Co działa:
+- event = 123456                        -> hint z nazwą eventu
+- command = { type = trigger which = 123456 } -> hint z nazwą eventu
+- command = { type = sleepevent which = 123456 } -> hint z nazwą eventu
+- monarch = 012345                      -> hint z nazwą monarchy
+- command = { type = sleepmonarch which = ... } -> hint monarchy
+- command = { type = wakemonarch which = ... } -> hint monarchy
+- command = { type = sleepleader which = ... } -> hint leadera
+- command = { type = wakeleader which = ... } -> hint leadera
+
+Co dodano technicznie:
+- parseEventIdsInLine()
+- parseMonarchIdsInLine()
+- rozpoznawanie leader / monarch / event przez command type + which
+- buildDbLookups() buduje lookupi nazw eventów, monarchów i leaderów
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+11. CODELENS DLA REFERENCJI ID I FLAG
+-------------------------------------
+Status: GOTOWE
+
+Co działa:
+- nad liniami z ID i flagami pojawia się CodeLens do szybkiego pokazania referencji
+- dla inline command event refs też pojawia się CodeLens typu:
+  References (inline): event <id> [<type>]
+
+Zakres:
+- event ID
+- flagi
+- inline referencje eventów z commandów
+
+Komendy rozszerzenia:
+- ftgRefs.showReferences
+- ftgRefs.showReferencesFromCursor
+- ftgRefs.goToDefinitionFromCursor
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+12. GO TO DEFINITION + FIND REFERENCES DLA ID I FLAG
+----------------------------------------------------
+Status: GOTOWE
+
+Co działa:
+- przejście do definicji dla rozpoznanych ID / flag
+- znajdowanie referencji dla rozpoznanych ID / flag
+- działa zarówno z kursora, jak i przez zarejestrowanych providerów VS Code
+
+Zakres rozpoznawanych symboli:
+- id = 123456
+- flag = name
+- type = setflag which = name
+- type = clrflag which = name
+- [flagname] w nawiasach
+
+Technicznie:
+- registerDefinitionProvider
+- registerReferenceProvider
+- parseSymbolFromLine()
+- parseSymbolAtPosition()
+- pickDefinitionCandidates()
+- peekReferences()
+- goToDefinition()
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+13. HOVER DOKUMENTACJA FTG
+--------------------------
+Status: GOTOWE
+
+Co działa:
+- hover na wielu komendach, triggerach i polach strukturalnych FTG
+- krótkie opisy składni i znaczenia w tooltipie
+
+Przykładowo opisane:
+- komendy: stability, treasury, inflation, manpower, domestic, relation, war,
+  alliance, vassal, religion, setflag, clrflag, trigger, sleepevent,
+  sleepmonarch, wakemonarch, sleepleader, wakeleader, capital, addcore_*, goods itd.
+- triggery: AND, OR, NOT, someof, random, exists, tag, neighbour, overlord,
+  atwar, isvassal, elector, emperor, hre, flag, event, year, owned, control itd.
+- pola: action_a-e, offset, deathdate, persistent, country
+- pola plików monarch / leader / religions
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+14. AUTOUZUPEŁNIANIE FTG (COMPLETION + SNIPPETS)
+------------------------------------------------
+Status: GOTOWE
+
+Co działa:
+- podpowiedzi typów komend po type =
+- podpowiedzi wartości which = zależnie od command type
+- podpowiedzi wartości value = zależnie od command type
+- snippety bloków command
+- podpowiedzi pól eventów / akcji / sub-bloków triggerów
+- podpowiedzi tagów krajów, religii, kultur, techgroup, AI plików itd. w odpowiednich kontekstach
+
+Przykłady:
+- command = { ... } -> gotowe snippety bloków
+- type = ... -> lista FTG command types
+- which = ... -> kontekstowe sugestie
+- value = ... -> kontekstowe sugestie
+- country = ... -> tagi państw + wartości specjalne
+- data = ... -> religie / kultury w odpowiednich blokach
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+15. WALIDACJA DOKUMENTÓW FTG W LOCIE
+------------------------------------
+Status: GOTOWE
+
+Co działa:
+- diagnostyka na otwarciu, edycji, zapisie oraz po zmianach plików
+- błędy i ostrzeżenia trafiają do Problems
+
+Aktualnie wykrywane m.in.:
+- niedomknięte / nadmiarowe nawiasy klamrowe
+- nieznane religie
+- nieznane tagi krajów w wielu kontekstach
+- nieznane ID prowincji w triggerach i wybranych commandach
+- nieznane suwaki domestic
+- zduplikowane event id
+- zduplikowane decision id
+- nieprawidłowe action_x (poza action_a do action_e)
+- niepoprawny offset (musi być nieujemną liczbą całkowitą)
+- pola boolean, które oczekują yes/no
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+16. AUTO-DETEKCJA PLIKÓW DANYCH MODA
+------------------------------------
+Status: GOTOWE
+
+Co działa:
+- rozszerzenie automatycznie wyszukuje pliki eventów
+- automatycznie wykrywa pliki monarchów
+- automatycznie wykrywa pliki leaderów
+- automatycznie wykrywa provinces.txt / plik prowincji po zawartości
+
+Po co:
+- żeby hinty, walidacja i lookupi działały bez ręcznego wskazywania większości plików
+
+Konfiguracja:
+- ftgRefs.autoDetectDataFiles
+- ftgRefs.provincesPath
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+- Work Folder/ftg-refs-codelens/package.json
+
+
+17. LOKALIZOWANIE NAZW Z Localisation/English
+---------------------------------------------
+Status: GOTOWE
+
+Co działa:
+- eventy pokazują zlokalizowane nazwy zamiast surowych kluczy, jeśli istnieją
+- monarchowie i leaderzy też mogą być rozwiązywani przez lokalizację
+- tagi państw dostają nazwy z lokalizacji
+- nazwy prowincji i innych bytów są normalizowane pod hinty / lookupi
+
+Technicznie:
+- buildEnglishLocalizationMap()
+- parseLocalizationFile()
+- resolveLocalizedName()
+
+Po co:
+- żeby inlay hints i lookupi były czytelne dla moda, a nie tylko dla kluczy typu EVENTNAME...
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+18. KONFIGURACJA JĘZYKA FTG W VS CODE
+-------------------------------------
+Status: GOTOWE
+
+Co działa:
+- komentarz liniowy `#`
+- parowanie nawiasów `{}` i `()`
+- auto-closing dla `{}`, `()` i cudzysłowów
+- surrounding pairs dla bloków i stringów
+
+Po co:
+- żeby edycja plików FTG była wygodna jak w normalnym języku w VS Code
+
+Plik:
+- Work Folder/ftg-refs-codelens/language-configuration/ftg.language-configuration.json
+
+
+19. REJESTRACJA JĘZYKA, KOMEND I USTAWIEŃ ROZSZERZENIA
+------------------------------------------------------
+Status: GOTOWE
+
+Co działa:
+- język `ftg` zarejestrowany jako osobny language id
+- natywna obsługa rozszerzeń: `.eue`, `.inc`, `.eug`
+- komendy palety poleceń dla referencji i definicji
+- ustawienia rozszerzenia widoczne w konfiguracji VS Code
+
+Dostępne ustawienia:
+- ftgRefs.enableCodeLens
+- ftgRefs.pythonPath
+- ftgRefs.scriptPath
+- ftgRefs.provincesPath
+- ftgRefs.enableProvinceInlayHints
+- ftgRefs.autoDetectDataFiles
+
+Uwaga:
+- skojarzenia `.txt` dla FTG są dodatkowo ustawiane w workspace settings, nie tylko w samym package.json
+
+Plik:
+- Work Folder/ftg-refs-codelens/package.json
+- .vscode/settings.json
+
+
+20. SZERSZE PODŚWIETLANIE SKŁADNI FTG W TEXTMATE
+------------------------------------------------
+Status: GOTOWE
+
+Poza rzeczami dopisanymi w tej sesji, gramatyka już obsługuje także:
+- komentarze `# ...`
+- stringi w cudzysłowach
+- liczby
+- proste pola dat (`year`, `month`, `day`)
+- nazwy miesięcy
+- klucze lokalizacji typu EVENTNAME / EVENTHIST / ACTIONNAME
+- operatory `=` oraz nawiasy `{}`
+- wartości boolean `yes/no`
+- wartości specjalne FTG: `random`, `capital`, `this`, `overlord`, `emperor`, `-1` do `-6` itd.
+- tagi krajów
+- pola strukturalne event / decision / monarch / leader
+- command types
+- trigger types
+- valueAssignments dla wybranych kontekstów (`religion`, `relation.which`, `domestic.which`, `provincereligion.data`)
+- religion definition names i religion fields w `religions.txt`
+
+Plik:
+- Work Folder/ftg-refs-codelens/syntaxes/ftg.tmLanguage.json
+
+
+21. SNIPPETY STRUKTUR FTG NA POZIOMIE TOP-LEVEL
+-----------------------------------------------
+Status: GOTOWE
+
+Co działa:
+- pełny snippet `event`
+- pełny snippet `decision`
+- pełny snippet `historicalmonarch`
+- pełny snippet `historicalleader`
+- snippet nawiasów po `event =` i `decision =`
+- snippet bloku daty po `date =` i `deathdate =`
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+22. SNIPPETY I PODPOWIEDZI W BLOKACH TRIGGERÓW
+----------------------------------------------
+Status: GOTOWE
+
+Co działa:
+- snippet `{ country = TAG }` dla `alliance`, `vassal`, `war`, `dynastic`, `truce`, `union`
+- snippet `{ country = TAG value = N }` dla `relation`
+- snippet `{ data = religion province = N }` dla `provincereligion`
+- snippet `{ data = culture province = N }` dla `provinceculture` / `cityculture`
+- podpowiedzi pól wewnątrz sub-bloków triggerów
+- kontekstowe sugestie `country =`, `data =` zależnie od typu bloku
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+23. WSPARCIE DLA PLIKU religions.txt
+------------------------------------
+Status: GOTOWE
+
+Co działa:
+- podświetlanie nazw definicji religii
+- podświetlanie pól religijnych
+- hover dla pól religii
+- completion dla pól religii
+- completion dla nazw religii, group i techgroup w odpowiednich miejscach
+- walidacja nazw religii w listach typu `heretic`, `allowed_conversion` itd.
+- walidacja `type = religion value = X`
+- walidacja `type = religion which = X` i `type = alt_provincereligion which = X`
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+- Work Folder/ftg-refs-codelens/syntaxes/ftg.tmLanguage.json
+
+
+24. HYBRYDOWY SYSTEM REFERENCJI: PYTHON + NATIVE JS
+---------------------------------------------------
+Status: GOTOWE
+
+Co działa:
+- dla standardowych ID / flag rozszerzenie korzysta z zewnętrznego skryptu `ftg_refs.py`
+- dla monarchów i leaderów działa osobna ścieżka natywna w JS
+- monarch / leader references oraz definition nie są uzależnione od ograniczeń skryptu Python
+
+Po co:
+- żeby referencje działały szerzej i pewniej
+- żeby monarchowie i leaderzy byli obsługiwani także tam, gdzie Pythonowy pipeline nie wystarczał
+
+Technicznie:
+- runRefsScript()
+- resolveRefs()
+- findMonarchOrLeaderItemsJs()
+- parseRefsOutput()
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+25. LIVE REFRESH + CACHE INVALIDATION
+-------------------------------------
+Status: GOTOWE
+
+Co działa:
+- cache są czyszczone po zapisie pliku
+- cache są czyszczone po utworzeniu, skasowaniu i zmianie nazwy plików
+- walidacja otwartych dokumentów odświeża się automatycznie
+- walidacja działa także przy otwieraniu i zmianie dokumentu
+- mapy prowincji / lookupi / completion data są buforowane i odświeżane po zmianach
+
+Po co:
+- żeby hinty, referencje, walidacja i completion nie wymagały restartu po każdej zmianie danych moda
+
+Technicznie:
+- clearAllCaches()
+- refreshOpenValidations()
+- onDidSaveTextDocument
+- onDidCreateFiles
+- onDidDeleteFiles
+- onDidRenameFiles
+- onDidOpenTextDocument
+- onDidChangeTextDocument
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+26. ZAKRES DZIAŁANIA WALIDACJI I PROVIDERÓW
+-------------------------------------------
+Status: GOTOWE
+
+Co działa:
+- pełne działanie dla dokumentów z language id `ftg`
+- dodatkowe obejmowanie plików znajdujących się w folderach:
+  - `Db/`
+  - `AI/`
+  - `Scenarios/`
+  - `Localisation/`
+
+Po co:
+- żeby rozszerzenie działało sensownie także wtedy, gdy plik nie ma formalnie rozszerzenia `.eue/.inc/.eug`, ale leży w folderach moda FTG
+
+Uwaga:
+- to uzupełnia skojarzenia plików ustawiane w workspace settings
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+- .vscode/settings.json
+
+
+27. INTERAKTYWNE WYBIERANIE DEFINICJI I REFERENCJI
+--------------------------------------------------
+Status: GOTOWE
+
+Co działa:
+- jeśli istnieje wiele trafień definicji lub referencji, rozszerzenie pokazuje Quick Pick
+- z listy można otworzyć wybrane trafienie bez ręcznego szukania po plikach
+- jeśli referencje są dostępne, może też uruchamiać Peek References w edytorze
+
+Po co:
+- żeby praca na dużym modzie była szybsza i wygodniejsza
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+28. ARTEFAKTY WYDAŃ I HISTORIA W FOLDERZE
+-----------------------------------------
+Status: GOTOWE / INFORMACYJNE
+
+Co jest w folderze:
+- kolejne paczki `.vsix` od wersji `0.1.9` do `0.3.0`
+- README z changelogiem wersji
+- package.json z aktualną wersją rozszerzenia
+
+Po co warto o tym pamiętać:
+- folder zawiera nie tylko źródło, ale też historię wydań i gotowe artefakty instalacyjne
+- przy kolejnych zmianach można łatwo utrzymać spójność między kodem, README i wersją paczki
+
+Plik / artefakty:
+- Work Folder/ftg-refs-codelens/package.json
+- Work Folder/ftg-refs-codelens/README.md
+- Work Folder/ftg-refs-codelens/*.vsix
+
+
+29. KONTEKSTOWE HOVERY DLA WARTOŚCI SPECJALNYCH FTG
+---------------------------------------------------
+Status: GOTOWE
+
+Co działa:
+- hover dla wartości specjalnych liczbowych i słownych po prawej stronie przypisań
+- przykłady: `-1`, `-2`, `-3`, `-4`, `-5`, `-6`, `-7`, `-9`, `random`, `capital`, `last_random`, `random_distinct`, `random_not_capital`, `emperor`, `random_elector`, `random_distinct_elector`, `this`, `overlord`
+- tooltip pokazuje znaczenie zależnie od kontekstu (`country` vs `province`), gdy da się to wywnioskować z pola i `type = ...`
+- dla `data = -1` w triggerach `core_national/core_claim/core_casusbelli/owned/control` tooltip ma osobne znaczenie: country receiving the event
+
+Po co:
+- żeby wartości typu `-1/-2/-6` były zrozumiałe bez sięgania do dokumentacji
+
+Technicznie:
+- parseAssignedValueAtPosition()
+- inferSpecialValueContext()
+- provideSpecialValueHover()
+- integracja w provideFtgHover()
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+30. DODATKOWE POPRAWKI HINTÓW KRAJU/PROWINCJI (DELTA)
+------------------------------------------------------
+Status: GOTOWE
+
+Co poprawiono:
+- `control = { province = X data = TAG }` i `owned = { province = X data = TAG }` pokazują hint kraju dla `data = TAG`
+- analogiczny hint kraju dla `data = TAG` działa też w triggerach:
+  - `core_national = { province = X data = TAG }`
+  - `core_claim = { province = X data = TAG }`
+  - `core_casusbelli = { province = X data = TAG }`
+- `command = { type = secedeprovince which = TAG value = N }` pokazuje hint kraju dla `which = TAG`
+- `command = { type = INF/CAV/ART which = PROV value = N }` pokazuje hint prowincji dla `which`
+
+Po co:
+- żeby kluczowe przypadki z eventów FTG miały spójne i kompletne podpowiedzi inline
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+31. WALIDACJA „ZŁE POLE W ZŁYM BLOKU”
+------------------------------------
+Status: GOTOWE
+
+Co działa:
+- ostrzeżenie, gdy użytkownik wpisze pole niepasujące do trigger sub-blocku
+- przykładowo:
+  - `relation = { ... }` -> dozwolone tylko `country`, `value`
+  - `alliance/vassal/war/dynastic/truce/union = { ... }` -> tylko `country`
+  - `core_national/core_claim/core_casusbelli/owned/control = { ... }` -> tylko `province`, `data`
+  - `ownerchange/controlchange = { ... }` -> `province`, `years`, `months`, `days`
+  - `fortresslevel/provincepopulation = { ... }` -> `province`, `data`
+  - `provincereligion/provinceculture/cityculture = { ... }` -> `province`, `data`
+
+Po co:
+- łapie sytuacje „wpisane w miejsce, gdzie nie powinno”, jeszcze podczas edycji
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+32. WALIDACJA „POLE POZA NAWIASEM/BLOKIEM”
+------------------------------------------
+Status: GOTOWE
+
+Co działa:
+- ostrzeżenie, gdy pojawi się `key = value` poza jakimkolwiek blokiem FTG
+- ostrzeżenie także dla gołego tekstu/śmieciowych tokenów poza blokiem (np. `hfdhdh`, `;k;kl;k]`)
+- dotyczy ustrukturyzowanych plików event/decision/monarch/leader
+- uzupełnione także o:
+  - ostrzeżenie dla śmieciowego tekstu wewnątrz bloków (np. samotne `iuouo`)
+  - ostrzeżenie dla dopisanego śmiecia po poprawnej linii FTG (np. `name = "..." jfjfjf`, `date = { ... } abc`)
+  - ostrzeżenie dla dopisanego śmiecia po wartościach niecytowanych (np. `country = BYZ hfdhd`)
+  - ostrzeżenie dla śmiecia bezpośrednio po otwarciu bloku (np. `trigger = {hdfhd`)
+- nie ostrzega dla poprawnych nagłówków top-level:
+  - `event = { ... }`
+  - `decision = { ... }`
+  - `historicalmonarch = { ... }`
+  - `historicalleader = { ... }`
+  - (oraz warianty `monarch = {`, `leader = {`)
+
+Po co:
+- wykrywa wpisanie czegoś „obok”, poza nawiasami, zwykle przez brak/nadmiar `}`
+
+Plik:
+- Work Folder/ftg-refs-codelens/extension.js
+
+
+CO JEST JUŻ ZROBIONE I NIE POWINNO BYĆ PROJEKTOWANE OD NOWA
+===========================================================
+- obsługa bloków logicznych NOT / AND / OR / someof
+- rekursja dla zagnieżdżonych bloków { ... }
+- hybrydowy system referencji Python + JS
+- live refresh i cache invalidation
+- zakres działania na folderach Db / AI / Scenarios / Localisation
+- interaktywne Quick Pick dla definicji / referencji
+- historia wydań i paczki VSIX w folderze
+- kontekstowe hovery dla wartości specjalnych FTG
+- poprawki hintów dla data=TAG (owned/control/core_*)
+- poprawki hintów dla secedeprovince oraz INF/CAV/ART
+- walidacja złego pola w trigger sub-blockach
+- walidacja pola poza nawiasem/blokiem
+- auto-detekcja plików danych moda
+- lookup nazw przez Localisation/English
+- konfiguracja języka FTG w VS Code
+- rejestracja języka / komend / ustawień rozszerzenia
+- szerokie podświetlanie TextMate dla składni FTG
+- wsparcie dla religions.txt
+- top-level snippety event / decision / monarch / leader
+- snippety trigger sub-blocków
+- inlay hints dla prowincji
+- inlay hints dla eventów / monarchów / leaderów
+- inlay hints dla tagów państw
+- CodeLens dla referencji ID / flag
+- go to definition / find references dla ID / flag
+- hover dokumentacja FTG
+- autouzupełnianie FTG i snippety commandów / bloków
+- walidacja dokumentów FTG w locie
+- podświetlanie sliderów domestic
+- podświetlanie flag: flag / setflag / clrflag
+- wyłączenie semantic highlighting dla ftg
+- naprawa konfliktu regex decisionhistory vs NOT/AND
+
+
+ROZWÓJ DALEJ - DODAWAĆ JAKO NOWE, NIE DUPLIKOWAĆ
+================================================
+Sensowne kolejne funkcje:
+1. Rozszerzenie hintów flag o dodatkowe konteksty / referencje
+2. Lepsze scope dla which / value / data / province / country
+3. Wartości specjalne FTG (-1, -2, -3, this, yes, no itd.) jako pełniejszy system hintów / hoverów
+4. Religie / kultury / goods / terrain jako osobne hinty opisowe, nie tylko completion / validation
+5. Decision ID / decisionhistory: hinty nazw decyzji i pełniejsza obsługa
+6. Walidacja literówek w trigger / command na szerszej liście komend FTG
+7. CodeLens / referencje dla większej liczby symboli niż tylko ID / flagi
+8. Mocniejsze wsparcie dla specjalnych targetów FTG (np. -1 / -2 / emperor / random_distinct)
+9. Rozbudowa hover docs o większą część składni FTG
+10. Dalsze dopracowanie składni TextMate dla rzadkich bloków i wartości
+
+
+CHECKLISTA PRZED DODANIEM NOWEJ FUNKCJI
+=======================================
+1. Przeczytaj ten plik.
+2. Sprawdź, czy funkcja nie istnieje już w extension.js albo ftg.tmLanguage.json.
+3. Jeśli to składnia: edytuj źródło w Work Folder/ftg-refs-codelens/syntaxes/.
+4. Jeśli to hinty / referencje / hover / completion: edytuj Work Folder/ftg-refs-codelens/extension.js.
+5. Po zmianie skopiuj do aktywnego rozszerzenia.
+6. Zrób Developer: Reload Window.
+7. Zweryfikuj na realnym pliku eventów FTG.

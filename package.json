@@ -1,0 +1,91 @@
+{
+  "name": "ftg-refs-codelens",
+  "displayName": "FTG Toolkit",
+  "description": "FTG syntax highlighting, references, definitions and inline hints",
+  "version": "0.3.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "ftg",
+        "aliases": [
+          "FTG",
+          "For The Glory"
+        ],
+        "extensions": [
+          ".eue",
+          ".inc",
+          ".eug"
+        ],
+        "configuration": "./language-configuration/ftg.language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ftg",
+        "scopeName": "source.ftg",
+        "path": "./syntaxes/ftg.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "ftgRefs.showReferences",
+        "title": "FTG: Show References"
+      },
+      {
+        "command": "ftgRefs.showReferencesFromCursor",
+        "title": "FTG: Show References from Cursor"
+      },
+      {
+        "command": "ftgRefs.goToDefinitionFromCursor",
+        "title": "FTG: Go to Definition from Cursor"
+      }
+    ],
+    "configuration": {
+      "title": "FTG Refs",
+      "properties": {
+        "ftgRefs.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable CodeLens for FTG IDs and flags"
+        },
+        "ftgRefs.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Python command used to run ftg_refs.py"
+        },
+        "ftgRefs.scriptPath": {
+          "type": "string",
+          "default": "Work Folder/tools/ftg_refs.py",
+          "description": "Path (relative to workspace) to ftg_refs.py"
+        },
+        "ftgRefs.provincesPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path (relative to workspace) to provinces.txt; empty = auto-detect"
+        },
+        "ftgRefs.enableProvinceInlayHints": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inline province-name hints for province = <id>"
+        },
+        "ftgRefs.autoDetectDataFiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-detect events/monarchs/leaders/provinces files by content"
+        }
+      }
+    }
+  }
+}

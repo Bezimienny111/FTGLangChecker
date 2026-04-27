@@ -47,7 +47,7 @@ VS Code extension for For The Glory modding: syntax highlighting, completions, v
 
 **Event/decision validation:**
 
-- Duplicate `id` within the same file (reported for both events and decisions; cross-file duplicates are not detected).
+- Duplicate `id` within the same file and across `Db/Events`/`Db/Decisions` (reported for both events and decisions).
 - Invalid action letter (`action_f` or higher — only `action_a` through `action_e` are valid).
 - Negative `offset` value.
 
@@ -133,6 +133,11 @@ Then reload VS Code window (F1) -> (`Developer: Reload Window`).
 - `FTG: Go to Definition from Cursor`
 
 ## Changelog
+
+### 0.3.2
+- Validation: cross-file duplicate ID detection added for `event` and `decision` definitions.
+- Validation: fixed false positives for valid command assignment chains such as `type = relation which = TAG value = N`.
+- Validation: parser and cache flow hardened for large structured FTG files.
 
 ### 0.3.1
 - Validation: strict `id` format check added (`id` must contain digits only). Invalid values like `id = 3001011abc` are now reported as errors.

@@ -928,6 +928,7 @@ const provinceCache = new Map();
 const dbLookupCache = new Map();
 const sourceDiscoveryCache = new Map();
 const completionDataCache = new Map();
+const crossFileIdIndexCache = new Map();
 
 function normalizeDbName(name) {
   if (!name) {
@@ -1417,11 +1418,147 @@ function getDbLookups(root) {
   return built;
 }
 
+function collectStructuredFtgFilesForIdIndex(root) {
+  const files = [];
+  const roots = [
+    path.join(root, "Db", "Events"),
+    path.join(root, "Db", "Decisions"),
+  ];
+
+  for (const baseDir of roots) {
+    if (!fs.existsSync(baseDir)) {
+      continue;
+    }
+
+    const stack = [baseDir];
+    while (stack.length) {
+      const current = stack.pop();
+      const entries = fs.readdirSync(current, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          if (SKIP_DIRS.has(entry.name)) {
+            continue;
+          }
+          stack.push(fullPath);
+          continue;
+        }
+
+        if (!entry.isFile()) {
+          continue;
+        }
+
+        const lower = entry.name.toLowerCase();
+        if (lower.endsWith(".txt") || lower.endsWith(".eue")) {
+          files.push(fullPath);
+        }
+      }
+    }
+  }
+
+  return files;
+}
+
+function addDefinitionToIdIndex(targetMap, id, filePath, lineNo) {
+  if (!targetMap.has(id)) {
+    targetMap.set(id, []);
+  }
+  targetMap.get(id).push({ filePath, lineNo });
+}
+
+function indexStructuredIdsFromContent(content, filePath, idIndex) {
+  const lines = content.split(/\r?\n/);
+  const braceStack = [];
+  const blockNameStack = [];
+  let inMultilineString = false;
+
+  for (let lineNo = 0; lineNo < lines.length; lineNo += 1) {
+    const lineText = lines[lineNo];
+    const analyzedLine = analyzeFtgLine(lineText, inMultilineString);
+    inMultilineString = analyzedLine.endsInString;
+    const codeText = analyzedLine.codeText;
+    const braceText = analyzedLine.braceText;
+
+    const blockOpenMatch = codeText.match(/\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\{/);
+    let openedOnThisLine = false;
+
+    for (let charNo = 0; charNo < braceText.length; charNo += 1) {
+      const char = braceText[charNo];
+      if (char === "{") {
+        braceStack.push({ lineNo, charNo });
+        const blockName =
+          !openedOnThisLine && blockOpenMatch
+            ? blockOpenMatch[1].toLowerCase()
+            : null;
+        blockNameStack.push(blockName);
+        openedOnThisLine = true;
+      } else if (char === "}" && braceStack.length) {
+        braceStack.pop();
+        blockNameStack.pop();
+      }
+    }
+
+    if (!codeText.trim()) {
+      continue;
+    }
+
+    const outerBlock = blockNameStack.length ? blockNameStack[0] : null;
+    if (outerBlock !== "event" && outerBlock !== "decision") {
+      continue;
+    }
+
+    const idMatch = codeText.match(/^\s*id\s*=\s*(\d+)\s*$/i);
+    if (!idMatch) {
+      continue;
+    }
+
+    const idVal = idMatch[1];
+    if (outerBlock === "event") {
+      addDefinitionToIdIndex(idIndex.events, idVal, filePath, lineNo);
+    } else {
+      addDefinitionToIdIndex(idIndex.decisions, idVal, filePath, lineNo);
+    }
+  }
+}
+
+function buildCrossFileIdIndex(root) {
+  const idIndex = {
+    events: new Map(),
+    decisions: new Map(),
+  };
+
+  const files = collectStructuredFtgFilesForIdIndex(root);
+  for (const filePath of files) {
+    let content;
+    try {
+      content = fs.readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+
+    indexStructuredIdsFromContent(content, filePath, idIndex);
+  }
+
+  return idIndex;
+}
+
+function getCrossFileIdIndex(root) {
+  const cached = crossFileIdIndexCache.get(root);
+  if (cached) {
+    return cached;
+  }
+
+  const built = buildCrossFileIdIndex(root);
+  crossFileIdIndexCache.set(root, built);
+  return built;
+}
+
 function clearAllCaches() {
   provinceCache.clear();
   dbLookupCache.clear();
   sourceDiscoveryCache.clear();
   completionDataCache.clear();
+  crossFileIdIndexCache.clear();
 }
 
 function getWorkspaceRoot(document) {
@@ -2952,6 +3089,99 @@ function analyzeFtgLine(lineText, initialInString = false) {
   };
 }
 
+function isValidAssignmentChain(text) {
+  let index = 0;
+
+  while (index < text.length) {
+    while (index < text.length && /\s/.test(text[index])) {
+      index += 1;
+    }
+
+    if (index >= text.length) {
+      return true;
+    }
+
+    const keyMatch = text
+      .slice(index)
+      .match(/^[A-Za-z_][A-Za-z0-9_]*/);
+    if (!keyMatch) {
+      return false;
+    }
+    index += keyMatch[0].length;
+
+    while (index < text.length && /\s/.test(text[index])) {
+      index += 1;
+    }
+
+    if (text[index] !== "=") {
+      return false;
+    }
+    index += 1;
+
+    while (index < text.length && /\s/.test(text[index])) {
+      index += 1;
+    }
+
+    if (index >= text.length) {
+      return false;
+    }
+
+    if (text[index] === '"') {
+      index += 1;
+      while (index < text.length && text[index] !== '"') {
+        index += 1;
+      }
+      if (index >= text.length) {
+        return false;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (text[index] === "{") {
+      let depth = 0;
+      let inString = false;
+
+      while (index < text.length) {
+        const char = text[index];
+
+        if (char === '"') {
+          inString = !inString;
+          index += 1;
+          continue;
+        }
+
+        if (!inString) {
+          if (char === "{") {
+            depth += 1;
+          } else if (char === "}") {
+            depth -= 1;
+            if (depth === 0) {
+              index += 1;
+              break;
+            }
+          }
+        }
+
+        index += 1;
+      }
+
+      if (depth !== 0) {
+        return false;
+      }
+      continue;
+    }
+
+    const tokenMatch = text.slice(index).match(/^-?[A-Za-z0-9_\.]+/);
+    if (!tokenMatch) {
+      return false;
+    }
+    index += tokenMatch[0].length;
+  }
+
+  return true;
+}
+
 function findTrailingGarbageAfterField(codeText) {
   const assignMatch = codeText.match(
     /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/,
@@ -3022,6 +3252,9 @@ function findTrailingGarbageAfterField(codeText) {
   }
 
   const garbage = rhs.slice(index).trim();
+  if (garbage && isValidAssignmentChain(garbage)) {
+    return null;
+  }
   return garbage ? { field, garbage } : null;
 }
 
@@ -3254,6 +3487,7 @@ function validateFtgDocument(document) {
         aiFiles: [],
       };
   const provinceMap = root ? getProvinceMap(root) : undefined;
+  const crossFileIdIndex = root ? getCrossFileIdIndex(root) : undefined;
   const diagnostics = [];
 
   const filePath = document.uri.fsPath;
@@ -3633,6 +3867,30 @@ function validateFtgDocument(document) {
         } else {
           eventIdMap.set(idVal, lineNo);
         }
+
+        const refs = crossFileIdIndex?.events?.get(idVal) || [];
+        const currentFileNorm = path.resolve(filePath).toLowerCase();
+        const externalRefs = refs.filter(
+          (ref) => path.resolve(ref.filePath).toLowerCase() !== currentFileNorm,
+        );
+        if (externalRefs.length > 0) {
+          const firstRef = externalRefs[0];
+          const relPath = root
+            ? path.relative(root, firstRef.filePath).replace(/\\/g, "/")
+            : firstRef.filePath;
+          const suffix =
+            externalRefs.length > 1
+              ? ` (+${externalRefs.length - 1} more)`
+              : "";
+
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, idVal),
+              `Duplicate event id '${idVal}' also found in '${relPath}' (line ${firstRef.lineNo + 1})${suffix}.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
       } else if (outerBlock === "decision") {
         if (decisionIdMap.has(idVal)) {
           diagnostics.push(
@@ -3644,6 +3902,30 @@ function validateFtgDocument(document) {
           );
         } else {
           decisionIdMap.set(idVal, lineNo);
+        }
+
+        const refs = crossFileIdIndex?.decisions?.get(idVal) || [];
+        const currentFileNorm = path.resolve(filePath).toLowerCase();
+        const externalRefs = refs.filter(
+          (ref) => path.resolve(ref.filePath).toLowerCase() !== currentFileNorm,
+        );
+        if (externalRefs.length > 0) {
+          const firstRef = externalRefs[0];
+          const relPath = root
+            ? path.relative(root, firstRef.filePath).replace(/\\/g, "/")
+            : firstRef.filePath;
+          const suffix =
+            externalRefs.length > 1
+              ? ` (+${externalRefs.length - 1} more)`
+              : "";
+
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, idVal),
+              `Duplicate decision id '${idVal}' also found in '${relPath}' (line ${firstRef.lineNo + 1})${suffix}.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
         }
       }
     }

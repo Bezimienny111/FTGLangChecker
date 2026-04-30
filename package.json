@@ -2,7 +2,7 @@
   "name": "ftg-refs-codelens",
   "displayName": "FTG Toolkit",
   "description": "FTG syntax highlighting, references, definitions and inline hints",
-  "version": "0.3.7",
+  "version": "0.3.9",
   "publisher": "local",
   "engines": {
     "vscode": "^1.80.0"
@@ -66,6 +66,18 @@
       {
         "command": "ftgRefs.jumpBetweenSourceAndLocalization",
         "title": "FTG: Jump Source <-> Localization"
+      },
+      {
+        "command": "ftgRefs.formatDocument",
+        "title": "FTG: Format Document (expand blocks)"
+      },
+      {
+        "command": "ftgRefs.scanAllProblems",
+        "title": "FTG: Scan Problems (Events + Decisions ? clipboard)"
+      },
+      {
+        "command": "ftgRefs.createWorkspace",
+        "title": "FTG: Create Workspace for Mod"
       }
     ],
     "keybindings": [
@@ -85,27 +97,64 @@
         "when": "editorTextFocus"
       }
     ],
+    "submenus": [
+      {
+        "id": "ftg.submenu",
+        "label": "FTG Toolkit v0.3.9"
+      }
+    ],
     "menus": {
       "editor/context": [
         {
+          "submenu": "ftg.submenu",
+          "when": "editorTextFocus",
+          "group": "navigation@9"
+        }
+      ],
+      "ftg.submenu": [
+        {
+          "command": "ftgRefs.showReferencesFromCursor",
+          "when": "editorTextFocus && editorLangId == ftg",
+          "group": "1_refs@1"
+        },
+        {
+          "command": "ftgRefs.goToDefinitionFromCursor",
+          "when": "editorTextFocus && editorLangId == ftg",
+          "group": "1_refs@2"
+        },
+        {
           "command": "ftgRefs.localizeEventFromCursor",
           "when": "editorTextFocus && editorLangId == ftg",
-          "group": "navigation@9"
+          "group": "2_localize@1"
         },
         {
           "command": "ftgRefs.localizeDecisionFromCursor",
           "when": "editorTextFocus",
-          "group": "navigation@9"
-        },
-        {
-          "command": "ftgRefs.insertProvinceIdFromCascade",
-          "when": "editorTextFocus && editorLangId == ftg",
-          "group": "navigation@10"
+          "group": "2_localize@2"
         },
         {
           "command": "ftgRefs.jumpBetweenSourceAndLocalization",
           "when": "editorTextFocus",
-          "group": "navigation@11"
+          "group": "2_localize@3"
+        },
+        {
+          "command": "ftgRefs.insertProvinceIdFromCascade",
+          "when": "editorTextFocus && editorLangId == ftg",
+          "group": "3_tools@1"
+        },
+        {
+          "command": "ftgRefs.formatDocument",
+          "when": "editorTextFocus && editorLangId == ftg",
+          "group": "3_tools@2"
+        },
+        {
+          "command": "ftgRefs.scanAllProblems",
+          "when": "editorTextFocus",
+          "group": "3_tools@3"
+        },
+        {
+          "command": "ftgRefs.createWorkspace",
+          "group": "4_workspace@1"
         }
       ],
       "commandPalette": [
@@ -124,6 +173,16 @@
         {
           "command": "ftgRefs.jumpBetweenSourceAndLocalization",
           "when": "editorTextFocus"
+        },
+        {
+          "command": "ftgRefs.formatDocument",
+          "when": "editorLangId == ftg"
+        },
+        {
+          "command": "ftgRefs.scanAllProblems"
+        },
+        {
+          "command": "ftgRefs.createWorkspace"
         }
       ]
     },

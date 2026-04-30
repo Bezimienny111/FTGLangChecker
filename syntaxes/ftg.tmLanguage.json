@@ -9,6 +9,7 @@
     { "include": "#months" },
     { "include": "#localizationKeys" },
     { "include": "#religionDefinitionNames" },
+    { "include": "#techgroupAssignments" },
     { "include": "#eventFields" },
     { "include": "#religionFields" },
     { "include": "#decisionHistory" },
@@ -130,6 +131,9 @@
               "include": "#strings"
             },
             {
+              "include": "#techgroupAssignments"
+            },
+            {
               "include": "#eventFields"
             },
             {
@@ -193,6 +197,9 @@
             },
             {
               "include": "#strings"
+            },
+            {
+              "include": "#techgroupAssignments"
             },
             {
               "include": "#eventFields"
@@ -330,6 +337,9 @@
               }
             },
             {
+              "include": "#techgroupAssignments"
+            },
+            {
               "include": "#eventFields"
             },
             {
@@ -402,6 +412,9 @@
                   "name": "constant.numeric.decision-definition-id.ftg"
                 }
               }
+            },
+            {
+              "include": "#techgroupAssignments"
             },
             {
               "include": "#eventFields"
@@ -497,24 +510,66 @@
       "patterns": [
         {
           "name": "support.function.command.ftg",
-          "match": "\\b(?:alliance|dynastic|vassal|breakvassal|breakoverlord|inherit|annex|independence|relation|casusbelli|war|peace|cedeprovince|secedeprovince|control|giveaccess|cancelaccess|revokeaccess|givetrade|revoketrade|elector|flagname|countryname|wakemonarch|sleepmonarch|wakeleader|sleepleader|conquistador|explorer|ADM|MIL|DIP|country|technology|religion|add_countryculture|remove_countryculture|manpower|badboy|capital|addcore|addcore_national|addcore_claim|addcore_casusbelli|removecore_national|removecore_claim|removecore_casusbelli|domestic|land|naval|stability|trade|infra|treasury|inflation|loansize|population|populationpercent|tax|provincetax|provincemanpower|manufactory|fortress|provincereligion|provinceculture|cityculture|alt_provincereligion|goods|terrain|conversion|heretic|hre|cot|removecot|mine|natives|nativeattack|revolt|province_revoltrisk|colonialrevolt|religiousrevolt|revoltrisk|gainbuilding|losebuilding|gainmanufactory|losemanufactory|fortresslevel|diplomats|colonists|merchants|missionaries|INF|CAV|ART|desertion|ai|setflag|clrflag|flag|sleepevent|trigger|vp|cash)\\b"
+          "match": "\\b(?:alliance|dynastic|vassal|breakvassal|breakoverlord|inherit|annex|independence|relation|casusbelli|war|peace|cedeprovince|secedeprovince|control|giveaccess|cancelaccess|revokeaccess|givetrade|revoketrade|elector|flagname|countryname|wakemonarch|sleepmonarch|wakeleader|sleepleader|conquistador|explorer|ADM|MIL|DIP|country|technology|religion|add_countryculture|remove_countryculture|manpower|badboy|capital|addcore|addcore_national|addcore_claim|addcore_casusbelli|removecore_national|removecore_claim|removecore_casusbelli|domestic|land|naval|stability|trade|infra|treasury|inflation|loansize|population|populationpercent|tax|provincetax|provincemanpower|manufactory|fortress|provincereligion|provinceculture|cityculture|alt_provincereligion|goods|terrain|conversion|heretic|hre|cot|removecot|mine|natives|nativeattack|revolt|province_revoltrisk|colonialrevolt|religiousrevolt|revoltrisk|gainbuilding|losebuilding|gainmanufactory|losemanufactory|fortresslevel|diplomats|colonists|merchants|missionaries|INF|CAV|ART|desertion|ai|setflag|clrflag|flag|sleepevent|trigger|vp|cash|discover)\\b"
         }
       ]
     },
-    "valueAssignments": {
+    "techgroupAssignments": {
       "patterns": [
         {
-          "name": "meta.assignment.religion.ftg",
-          "match": "\\b(religion)\\s*=\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "name": "meta.assignment.techgroup.ftg",
+          "match": "\\b(techgroup|technology)\\s*=\\s*(latin|orthodox|muslim|asian|african|pagan|china|exotic)\\b",
           "captures": {
             "1": {
               "name": "keyword.control.structure.ftg"
             },
             "2": {
-              "name": "constant.language.religion.ftg"
+              "name": "constant.language.techgroup.ftg"
             }
           }
         },
+        {
+          "name": "meta.assignment.technology-which.ftg",
+          "match": "\\b(type)\\s*=\\s*(technology)\\b[^\\n\\r}]*\\b(which)\\s*=\\s*(latin|orthodox|muslim|asian|african|pagan|china|exotic)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.structure.ftg" },
+            "2": { "name": "support.function.command.ftg" },
+            "3": { "name": "keyword.control.structure.ftg" },
+            "4": { "name": "constant.language.techgroup.ftg" }
+          }
+        },
+        {
+          "name": "meta.assignment.religion.ftg",
+          "match": "\\b(religion)\\s*=\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.structure.ftg" },
+            "2": { "name": "constant.language.religion.ftg" }
+          }
+        },
+        {
+          "name": "meta.assignment.religion-which.ftg",
+          "match": "\\b(type)\\s*=\\s*(religion|alt_provincereligion)\\b[^\\n\\r}]*\\b(which)\\s*=\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.structure.ftg" },
+            "2": { "name": "support.function.command.ftg" },
+            "3": { "name": "keyword.control.structure.ftg" },
+            "4": { "name": "constant.language.religion.ftg" }
+          }
+        },
+        {
+          "name": "meta.assignment.religion-value.ftg",
+          "match": "\\b(type)\\s*=\\s*(religion|alt_provincereligion)\\b[^\\n\\r}]*\\b(value)\\s*=\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.structure.ftg" },
+            "2": { "name": "support.function.command.ftg" },
+            "3": { "name": "keyword.control.structure.ftg" },
+            "4": { "name": "constant.language.religion.ftg" }
+          }
+        }
+      ]
+    },
+    "valueAssignments": {
+      "patterns": [
         {
           "name": "meta.assignment.domestic-which.ftg",
           "match": "\\b(type)\\s*=\\s*(domestic)\\b[^\\n\\r}]*\\b(which)\\s*=\\s*((?i:aristocracy|centralization|innovative|mercantilism|land|offensive|quality|serfdom))\\b",
@@ -530,6 +585,24 @@
             },
             "4": {
               "name": "support.type.trigger.ftg"
+            }
+          }
+        },
+        {
+          "name": "meta.assignment.technology-which.ftg",
+          "match": "\\b(type)\\s*=\\s*(technology)\\b[^\\n\\r}]*\\b(which)\\s*=\\s*(latin|orthodox|muslim|asian|african|pagan|china|exotic)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.structure.ftg"
+            },
+            "2": {
+              "name": "support.function.command.ftg"
+            },
+            "3": {
+              "name": "keyword.control.structure.ftg"
+            },
+            "4": {
+              "name": "constant.language.techgroup.ftg"
             }
           }
         },
@@ -572,7 +645,7 @@
       "patterns": [
         {
           "name": "support.type.trigger.ftg",
-          "match": "\\b(?:alliance|dynastic|vassal|union|war|truce|atwar|isvassal|ai|event|decision|flag|exists|year|month|day|someof|random|badboy|inflation|treasury|diplomats|merchants|colonists|missionaries|elector|emperor|hre|neighbour|tag|domestic|land|naval|stability|trade|infra|capital|countrysize|core_national|core_claim|core_casusbelli|provinceculture|cityculture|provincereligion|owned|control|ownerchange|controlchange|discovered|cot|fortresslevel|provincepopulation|tradingpost|colony|colonialcity|city|relation|bankrupt|revolt|occupied|manpower)\\b"
+          "match": "\\b(?:alliance|dynastic|vassal|union|war|truce|atwar|isvassal|ai|event|decision|flag|exists|year|month|day|someof|random|badboy|inflation|treasury|diplomats|merchants|colonists|missionaries|elector|emperor|hre|neighbour|tag|domestic|land|naval|stability|trade|infra|capital|countrysize|core_national|core_claim|core_casusbelli|provinceculture|cityculture|provincereligion|owned|control|ownerchange|controlchange|discovered|cot|fortresslevel|provincepopulation|tradingpost|colony|colonialcity|city|relation|bankrupt|revolt|occupied|manpower|knows|continent)\\b"
         }
       ]
     },

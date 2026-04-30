@@ -102,6 +102,23 @@ Hovering over any FTG keyword shows a description:
 
 2. Reload VS Code window (`Developer: Reload Window`).
 
+
+## Setting Up a Workspace for a Mod
+
+The easiest way to get full FTG Toolkit support for any mod is to use the built-in **Create Workspace** command:
+
+1. Open any .txt file from the mod folder (e.g. an event file).
+2. Right-click in the editor -> **FTG Toolkit** -> **FTG: Create Workspace for Mod**
+   (or open Command Palette Ctrl+Shift+P -> FTG: Create Workspace for Mod).
+3. The extension automatically detects the mod root (walks up from the active file looking for the Db/ folder).
+4. A <ModName>.code-workspace file is created in the mod root with the following settings pre-configured:
+   - **Encoding**: windows-1252 (standard FTG encoding)
+   - **File associations**: .txt, .eug, .inc files in AI/, Db/, Scenarios/ mapped to the tg language
+   - **Syntax highlighting** color rules for commands, triggers, IDs, and flags
+5. When prompted, click **Open Workspace** -- VS Code switches to the new workspace.
+6. After the workspace opens, do **Developer: Reload Window** once more to activate all extension features.
+
+> **Note:** If the workspace file already exists, you will be asked whether to overwrite it.
 ## Enable Syntax on FTG Text Files
 
 By default, the extension registers `.eue`, `.inc`, and `.eug`. Most FTG mod files are `.txt`, so add file associations in your workspace/user `settings.json`:

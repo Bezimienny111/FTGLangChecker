@@ -19,7 +19,9 @@ const COMMAND_TYPE_WHICH_TAG_RE =
   /\btype\s*=\s*([A-Za-z_]+)\b[^\n\r}]*\bwhich\s*=\s*([A-Z][A-Z0-9]{2})\b/gi;
 const COUNTRY_FIELD_ASSIGN_RE = /\bcountry\s*=\s*([A-Z][A-Z0-9]{2})\b/gi;
 const COUNTRY_TRIGGER_TAG_RE =
-  /\b(?:exists|tag|neighbour|overlord)\s*=\s*([A-Z][A-Z0-9]{2})\b/gi;
+  /\b(?:exists|tag|neighbour|overlord|knows)\s*=\s*([A-Z][A-Z0-9]{2})\b/gi;
+const COUNTRY_BLOCK_OPENER_TAG_RE =
+  /\b(?!AND\b|NOT\b|OR\b)([A-Z][A-Z0-9]{2})\s*=\s*\{/gi;
 const PROVINCE_TRIGGER_DATA_TAG_RE =
   /\b(?:core_national|core_claim|core_casusbelli|owned|control)\s*=\s*\{[^\n\r}]*\bdata\s*=\s*([A-Z][A-Z0-9]{2})\b/gi;
 
@@ -76,6 +78,7 @@ const PROVINCE_WHICH_TYPES = new Set([
   "inf",
   "cav",
   "art",
+  "discover",
 ]);
 
 const EVENT_WHICH_TYPES = new Set(["trigger", "sleepevent"]);
@@ -517,6 +520,8 @@ const FTG_TRIGGER_KEYS = [
   "manpower",
   "countrysize",
   "decision",
+  "knows",
+  "continent",
 ];
 const FTG_TRIGGER_CONTEXT_BLOCKS = new Set([
   "trigger",
@@ -1527,6 +1532,20 @@ function parseEventNamesFromFile(content, targetMap, localizationMap) {
         depth = countChar(clean, "{") - countChar(clean, "}");
         eventId = undefined;
         eventName = undefined;
+        // parse id/name from opener line, then check if already closed
+        const idMatchOpen = clean.match(/\bid\s*=\s*(\d+)\b/i);
+        if (idMatchOpen) eventId = idMatchOpen[1];
+        const nameMatchOpen = clean.match(/\bname\s*=\s*"([^"]+)"/i);
+        if (nameMatchOpen)
+          eventName = resolveLocalizedName(nameMatchOpen[1], localizationMap);
+        if (depth <= 0) {
+          if (eventId && eventName && !targetMap.has(eventId))
+            targetMap.set(eventId, eventName);
+          inBlock = false;
+          depth = 0;
+          eventId = undefined;
+          eventName = undefined;
+        }
       }
       continue;
     }
@@ -1683,10 +1702,25 @@ function getDbLookups(root) {
 
 function collectStructuredFtgFilesForIdIndex(root) {
   const files = [];
-  const roots = [
+
+  // Build list of candidate dirs: Db/Events, Db/Decisions + root-level Events, Decisions
+  const candidateDirs = [
     path.join(root, "Db", "Events"),
     path.join(root, "Db", "Decisions"),
   ];
+  // Also check root-level (mods where Events/ is alongside Db/)
+  try {
+    const rootEntries = fs.readdirSync(root, { withFileTypes: true });
+    for (const e of rootEntries) {
+      if (e.isDirectory() && /^(events|decisions)$/i.test(e.name)) {
+        candidateDirs.push(path.join(root, e.name));
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  const roots = [...new Set(candidateDirs)];
 
   for (const baseDir of roots) {
     if (!fs.existsSync(baseDir)) {
@@ -1772,7 +1806,8 @@ function indexStructuredIdsFromContent(content, filePath, idIndex) {
       continue;
     }
 
-    const idMatch = codeText.match(/^\s*id\s*=\s*(\d+)\s*$/i);
+    // Use \b...\b so compact style "event = { id = 6958 #..." is also matched
+    const idMatch = codeText.match(/\bid\s*=\s*(\d+)\b/i);
     if (!idMatch) {
       continue;
     }
@@ -2854,6 +2889,21 @@ function parseCountryTagsInLine(lineText, lineNo) {
       hintPos: new vscode.Position(lineNo, endChar),
     });
     matchProvData = PROVINCE_TRIGGER_DATA_TAG_RE.exec(lineText);
+  }
+
+  COUNTRY_BLOCK_OPENER_TAG_RE.lastIndex = 0;
+  let matchOpener = COUNTRY_BLOCK_OPENER_TAG_RE.exec(lineText);
+  while (matchOpener) {
+    const tag = (matchOpener[1] || "").toUpperCase();
+    const startChar =
+      matchOpener.index + matchOpener[0].lastIndexOf(matchOpener[1]);
+    const endChar = startChar + matchOpener[1].length;
+    results.push({
+      kind: "country",
+      id: tag,
+      hintPos: new vscode.Position(lineNo, endChar),
+    });
+    matchOpener = COUNTRY_BLOCK_OPENER_TAG_RE.exec(lineText);
   }
 
   COMMAND_TYPE_WHICH_TAG_RE.lastIndex = 0;
@@ -4116,10 +4166,21 @@ function provideStructureCompletionItems(
     );
   }
 
-  if (/\btechgroup\s*=\s*[a-z_]*$/.test(codePrefix)) {
+  if (/\b(?:techgroup|technology)\s*=\s*[a-z_]*$/.test(codePrefix)) {
     const wordRange = document.getWordRangeAtPosition(position, /[A-Za-z_]+/);
     return createCompletionItems(
-      ["latin", "orthodox", "muslim", "china", "exotic", "african"],
+      completionData.techgroups.length
+        ? completionData.techgroups
+        : [
+            "latin",
+            "orthodox",
+            "muslim",
+            "china",
+            "exotic",
+            "african",
+            "asian",
+            "pagan",
+          ],
       vscode.CompletionItemKind.Value,
       "FTG techgroup",
       wordRange,
@@ -4313,6 +4374,10 @@ function getValueSuggestions(type, completionData) {
 
 function shouldValidateDocument(document) {
   const normalized = document.uri.fsPath.replace(/\\/g, "/").toLowerCase();
+  // Exclude readme/documentation files from validation
+  const basename = normalized.split("/").pop();
+  if (basename === "readme.txt") return false;
+  if (basename === "event_ids.txt") return false;
   return FTG_VALIDATION_SELECTOR.some((segment) =>
     normalized.includes(`/${segment.toLowerCase()}`),
   );
@@ -4339,7 +4404,17 @@ function analyzeFtgLine(lineText, initialInString = false) {
     }
 
     if (char === '"') {
-      inString = !inString;
+      if (inString) {
+        // Close the string only on the LAST " before a # comment or end of line.
+        // Any earlier " is an embedded quote in FTG prose (e.g. desc = "...as "name"...").
+        const rest = lineText.slice(index + 1);
+        const hasAnotherQuote = /^[^#]*"/.test(rest);
+        if (!hasAnotherQuote) {
+          inString = false;
+        }
+      } else {
+        inString = true;
+      }
       codeText += char;
       braceText += " ";
       continue;
@@ -4477,15 +4552,13 @@ function findTrailingGarbageAfterField(codeText) {
   }
 
   if (rhs[index] === '"') {
-    index += 1;
-    while (index < rhs.length) {
-      if (rhs[index] === '"') {
-        const garbage = rhs.slice(index + 1).trim();
-        return garbage ? { field, garbage } : null;
-      }
-      index += 1;
+    // Find the LAST " in rhs � embedded quotes in prose (e.g. "...as "name"...") are valid.
+    const lastQuote = rhs.lastIndexOf('"');
+    if (lastQuote <= index) {
+      return null;
     }
-    return null;
+    const garbage = rhs.slice(lastQuote + 1).trim();
+    return garbage ? { field, garbage } : null;
   }
 
   if (rhs[index] === "{") {
@@ -4510,7 +4583,10 @@ function findTrailingGarbageAfterField(codeText) {
         depth -= 1;
         if (depth === 0) {
           const garbage = rhs.slice(index + 1).trim();
-          return garbage ? { field, garbage } : null;
+          if (!garbage) return null;
+          // Closing braces of parent blocks are not garbage
+          if (/^[}\s]*(#.*)?$/.test(garbage)) return null;
+          return { field, garbage };
         }
       }
     }
@@ -4526,6 +4602,8 @@ function findTrailingGarbageAfterField(codeText) {
   if (garbage && isValidAssignmentChain(garbage)) {
     return null;
   }
+  // Closing braces after scalar values are valid (e.g. `event = 187031 }`)
+  if (/^[}\s]*(#.*)?$/.test(garbage)) return null;
   return garbage ? { field, garbage } : null;
 }
 
@@ -4624,7 +4702,7 @@ function validateTopLevelFieldPlacement(
 
 function isStructuredFtgFilePath(filePath) {
   return (
-    /[\\/]Db[\\/](Events|Decisions|Monarchs|Leaders)[\\/].*\.txt$/i.test(
+    /[\\\/](?:Db[\\\/])?(Events|Decisions|Monarchs|Leaders)[\\\/].*\.txt$/i.test(
       filePath,
     ) || /\.eue$/i.test(filePath)
   );
@@ -4777,6 +4855,9 @@ function validateFtgDocument(document) {
     const cultureSet = new Set(
       (completionData.cultures || []).map((value) => value.toLowerCase()),
     );
+    const techgroupSet = new Set(
+      (completionData.techgroups || []).map((value) => value.toLowerCase()),
+    );
     // yes/no boolean trigger fields
     const BOOL_TRIGGER_FIELDS = new Set([
       "atwar",
@@ -4828,6 +4909,19 @@ function validateFtgDocument(document) {
         /\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\{/,
       );
 
+      // Capture block context at the START of the line (before braces are processed).
+      // Content on this line belongs to the block that was active when the line began.
+      const blockAtLineStart = blockNameStack.length
+        ? blockNameStack[blockNameStack.length - 1]
+        : null;
+      const parentAtLineStart =
+        blockNameStack.length > 1
+          ? blockNameStack[blockNameStack.length - 2]
+          : null;
+      // Stack depth at line start � non-zero means we ARE inside block(s) even if
+      // the innermost block has no captured name (e.g. second opener on same line).
+      const depthAtLineStart = blockNameStack.length;
+
       let openedOnThisLine = false;
       for (let charNo = 0; charNo < braceText.length; charNo += 1) {
         const char = braceText[charNo];
@@ -4865,7 +4959,7 @@ function validateFtgDocument(document) {
         continue;
       }
 
-      // current block context (innermost)
+      // current block context (innermost) � post-brace state, used for tracking
       const currentBlock = blockNameStack.length
         ? blockNameStack[blockNameStack.length - 1]
         : null;
@@ -4874,12 +4968,21 @@ function validateFtgDocument(document) {
           ? blockNameStack[blockNameStack.length - 2]
           : null;
 
+      // For validation we use the block context that was active at the START of
+      // the line, so that compact forms like `command = { ... }}}` are not
+      // incorrectly reported as "outside any block".
+      // validationBlock: non-null when we are inside ANY block at line start,
+      // even if the innermost block has no captured name (second opener on same line).
+      const validationBlock =
+        depthAtLineStart > 0 ? (blockAtLineStart ?? "__block__") : null;
+      const validationParentBlock = parentAtLineStart;
+
       // ── misplaced fields outside blocks ─────────────────────────────────────
       validateTopLevelFieldPlacement(
         diagnostics,
         codeText,
         lineNo,
-        currentBlock,
+        validationBlock,
         filePath,
       );
 
@@ -4888,7 +4991,7 @@ function validateFtgDocument(document) {
         diagnostics,
         codeText,
         lineNo,
-        currentBlock,
+        validationBlock,
         filePath,
         isReligionsFile,
       );
@@ -4898,7 +5001,7 @@ function validateFtgDocument(document) {
         diagnostics,
         codeText,
         lineNo,
-        currentBlock,
+        validationBlock,
         filePath,
       );
 
@@ -4907,7 +5010,7 @@ function validateFtgDocument(document) {
         diagnostics,
         codeText,
         lineNo,
-        currentBlock,
+        validationBlock,
         filePath,
       );
 
@@ -4926,8 +5029,8 @@ function validateFtgDocument(document) {
         diagnostics,
         codeText,
         lineNo,
-        currentBlock,
-        parentBlock,
+        validationBlock,
+        validationParentBlock,
       );
 
       // ── track type = X inside command blocks ─────────────────────────────────
@@ -5013,6 +5116,40 @@ function validateFtgDocument(document) {
             }
           }
         }
+        if (cmdType === "technology" && techgroupSet.size > 0) {
+          const whichMatch = codeText.match(
+            /\bwhich\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
+          );
+          if (whichMatch) {
+            const value = whichMatch[1];
+            if (!techgroupSet.has(value.toLowerCase())) {
+              diagnostics.push(
+                new vscode.Diagnostic(
+                  rangeForValue(codeText, lineNo, value),
+                  `Unknown tech group '${value}'. Check Db/Technologies/techgroups.txt.`,
+                  vscode.DiagnosticSeverity.Warning,
+                ),
+              );
+            }
+          }
+        }
+      }
+
+      // type = technology which = X (single-line command)
+      const cmdTechMatch = codeText.match(
+        /\btype\s*=\s*technology\b[^\n\r}]*\bwhich\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
+      );
+      if (cmdTechMatch && techgroupSet.size > 0) {
+        const value = cmdTechMatch[1];
+        if (!techgroupSet.has(value.toLowerCase())) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown tech group '${value}'. Check Db/Technologies/techgroups.txt.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
       }
 
       // ── religion = X ──────────────────────────────────────────────────────────
@@ -5026,6 +5163,23 @@ function validateFtgDocument(document) {
             new vscode.Diagnostic(
               rangeForValue(codeText, lineNo, value),
               `Unknown religion '${value}'. Check Db/Religions/religions.txt.`,
+              vscode.DiagnosticSeverity.Warning,
+            ),
+          );
+        }
+      }
+
+      // techgroup = X / technology = X (trigger)
+      const techgroupMatch = codeText.match(
+        /\b(?:techgroup|technology)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/i,
+      );
+      if (techgroupMatch && techgroupSet.size > 0) {
+        const value = techgroupMatch[1];
+        if (!techgroupSet.has(value.toLowerCase())) {
+          diagnostics.push(
+            new vscode.Diagnostic(
+              rangeForValue(codeText, lineNo, value),
+              `Unknown tech group '${value}'. Check Db/Technologies/techgroups.txt.`,
               vscode.DiagnosticSeverity.Warning,
             ),
           );
@@ -5126,7 +5280,14 @@ function validateFtgDocument(document) {
       const idFieldMatch = codeText.match(/^\s*id\s*=\s*(.+?)\s*$/i);
       if (idFieldMatch) {
         const rawIdValue = (idFieldMatch[1] || "").trim();
-        if (!/^\d+$/.test(rawIdValue)) {
+        // id = { type = 6 id = X } is valid for monarch/leader - skip digit check
+        const isMonarchLeaderBlock =
+          /^\{\s*type\s*=\s*6\b/i.test(rawIdValue) ||
+          blockAtLineStart === "historicalmonarch" ||
+          blockAtLineStart === "historicalleader" ||
+          blockAtLineStart === "monarch" ||
+          blockAtLineStart === "leader";
+        if (!isMonarchLeaderBlock && !/^\d+$/.test(rawIdValue)) {
           diagnostics.push(
             new vscode.Diagnostic(
               rangeForValue(codeText, lineNo, rawIdValue || "id"),
@@ -5325,9 +5486,11 @@ function validateFtgDocument(document) {
       }
 
       // ── trigger: yes/no boolean fields ───────────────────────────────────────
-      const boolFieldMatch = codeText.match(
-        /\b(atwar|isvassal|elector|emperor|hre|bankrupt|revolt|occupied|city)\s*=\s*([A-Za-z0-9_]+)\b/i,
-      );
+      const boolFieldMatch = isStructuredFtgFile
+        ? codeText.match(
+            /\b(atwar|isvassal|elector|emperor|hre|bankrupt|revolt|occupied|city)\s*=\s*([A-Za-z0-9_]+)\b/i,
+          )
+        : null;
       if (boolFieldMatch) {
         const value = boolFieldMatch[2].toLowerCase();
         if (value !== "yes" && value !== "no") {
@@ -5781,7 +5944,7 @@ async function insertProvinceIdFromCascade() {
   );
   if (!target) {
     vscode.window.showInformationMessage(
-      "FTG Toolkit: ustaw kursor w polu province/which/value, kt�re oczekuje ID prowincji.",
+      "FTG Toolkit: ustaw kursor w polu province/which/value, kt�re oczekuje ID prowincji.",
     );
     return;
   }
@@ -5879,6 +6042,9 @@ class FtgRefsCodeLensProvider {
 }
 
 function activate(context) {
+  const ftgOutputChannel = vscode.window.createOutputChannel("FTG Toolkit");
+  context.subscriptions.push(ftgOutputChannel);
+
   const selector = [
     { language: "ftg", scheme: "file" },
     { pattern: "**/Db/**", scheme: "file" },
@@ -6311,6 +6477,786 @@ function activate(context) {
       provideHover: provideFtgHover,
     }),
   );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("ftgRefs.createWorkspace", async () => {
+      const nodePath = require("path");
+      const nodeFs = require("fs");
+
+      function findRootFromFile(filePath) {
+        let dir = nodePath.dirname(filePath);
+        for (let i = 0; i < 10; i++) {
+          if (nodeFs.existsSync(nodePath.join(dir, "Db"))) return dir;
+          const parent = nodePath.dirname(dir);
+          if (parent === dir) break;
+          dir = parent;
+        }
+        return null;
+      }
+
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+      const activeFile = vscode.window.activeTextEditor?.document?.uri?.fsPath;
+      let root = activeFile ? findRootFromFile(activeFile) : null;
+
+      if (!root && workspaceFolders) {
+        for (const wf of workspaceFolders) {
+          if (nodeFs.existsSync(nodePath.join(wf.uri.fsPath, "Db"))) {
+            root = wf.uri.fsPath;
+            break;
+          }
+        }
+      }
+
+      if (!root) {
+        vscode.window.showWarningMessage(
+          "FTG Toolkit: Could not find Db/ folder. Open a file from an FTG mod folder first.",
+        );
+        return;
+      }
+
+      const modName = nodePath.basename(root);
+      const wsPath = nodePath.join(root, modName + ".code-workspace");
+
+      if (nodeFs.existsSync(wsPath)) {
+        const choice = await vscode.window.showWarningMessage(
+          `Workspace file "${modName}.code-workspace" already exists. Overwrite?`,
+          "Overwrite",
+          "Cancel",
+        );
+        if (choice !== "Overwrite") return;
+      }
+
+      const wsContent = {
+        folders: [{ path: "." }],
+        settings: {
+          "files.encoding": "windows1252",
+          "files.autoGuessEncoding": false,
+          "files.defaultLanguage": "ftg",
+          "files.associations": {
+            "**/*.txt": "ftg",
+            "AI/**/*.txt": "ftg",
+            "Db/**/*.txt": "ftg",
+            "Db/Events/**/*.txt": "ftg",
+            "Db/Decisions/**/*.txt": "ftg",
+            "Scenarios/**/*.txt": "ftg",
+            "Scenarios/**/*.eug": "ftg",
+            "Scenarios/**/*.inc": "ftg",
+            "*.eue": "ftg",
+          },
+          "editor.tokenColorCustomizations": {
+            textMateRules: [
+              {
+                name: "FTG Commands and Triggers",
+                scope: [
+                  "support.function.command.ftg",
+                  "support.type.trigger.ftg",
+                ],
+                settings: { fontStyle: "bold" },
+              },
+              {
+                name: "FTG Structure Keywords",
+                scope: [
+                  "keyword.control.structure.ftg",
+                  "keyword.control.logical.ftg",
+                ],
+                settings: { fontStyle: "bold" },
+              },
+              {
+                name: "FTG Event and Decision IDs",
+                scope: [
+                  "constant.numeric.event-definition-id.ftg",
+                  "constant.numeric.decision-definition-id.ftg",
+                ],
+                settings: { fontStyle: "bold underline" },
+              },
+              {
+                name: "FTG Flags",
+                scope: "variable.other.flag.ftg",
+                settings: { fontStyle: "italic" },
+              },
+            ],
+          },
+        },
+      };
+
+      nodeFs.writeFileSync(wsPath, JSON.stringify(wsContent, null, 2), "utf-8");
+
+      const choice = await vscode.window.showInformationMessage(
+        `Workspace "${modName}.code-workspace" created successfully.`,
+        "Open Workspace",
+        "Close",
+      );
+      if (choice === "Open Workspace") {
+        await vscode.commands.executeCommand(
+          "vscode.openFolder",
+          vscode.Uri.file(wsPath),
+          false,
+        );
+      }
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("ftgRefs.scanAllProblems", async () => {
+      const nodePath = require("path");
+      const nodeFs = require("fs");
+
+      // Determine root: walk up from active file looking for folder with Db/ subfolder
+      function findRootFromFile(filePath) {
+        let dir = nodePath.dirname(filePath);
+        for (let i = 0; i < 10; i++) {
+          if (nodeFs.existsSync(nodePath.join(dir, "Db"))) return dir;
+          const parent = nodePath.dirname(dir);
+          if (parent === dir) break;
+          dir = parent;
+        }
+        return null;
+      }
+
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+
+      // 1) Try active file (may be null if command palette stole focus)
+      const activeFile = vscode.window.activeTextEditor?.document?.uri?.fsPath;
+      let root = activeFile ? findRootFromFile(activeFile) : null;
+
+      // 2) Try all workspace folders looking for one with Db/ subfolder
+      if (!root && workspaceFolders) {
+        for (const wf of workspaceFolders) {
+          if (nodeFs.existsSync(nodePath.join(wf.uri.fsPath, "Db"))) {
+            root = wf.uri.fsPath;
+            break;
+          }
+        }
+      }
+
+      if (!root) {
+        vscode.window.showWarningMessage(
+          "FTG Toolkit: Could not find Db/ folder in any workspace.",
+        );
+        return;
+      }
+
+      // Collect .txt files recursively from Db/Events and Db/Decisions
+      // Use case-insensitive folder name matching for cross-mod compatibility
+      function collectFtgFilesRecursive(dir, result) {
+        if (!nodeFs.existsSync(dir)) return;
+        const entries = nodeFs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const full = nodePath.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            collectFtgFilesRecursive(full, result);
+          } else {
+            const lower = entry.name.toLowerCase();
+            if (
+              lower.endsWith(".txt") ||
+              lower.endsWith(".eue") ||
+              lower.endsWith(".eug") ||
+              lower.endsWith(".inc")
+            ) {
+              result.push(full);
+            }
+          }
+        }
+      }
+
+      // Find Events/Decisions folders � check both inside Db/ and at root level
+      const dbDir = nodePath.join(root, "Db");
+      const targetDirNames = ["events", "decisions"];
+      const targetDirs = [];
+
+      // 1) Look inside Db/
+      if (nodeFs.existsSync(dbDir)) {
+        const dbEntries = nodeFs.readdirSync(dbDir, { withFileTypes: true });
+        for (const e of dbEntries) {
+          if (
+            e.isDirectory() &&
+            targetDirNames.includes(e.name.toLowerCase())
+          ) {
+            targetDirs.push(nodePath.join(dbDir, e.name));
+          }
+        }
+      }
+
+      // 2) Look at root level (same level as Db/)
+      const rootEntries = nodeFs.readdirSync(root, { withFileTypes: true });
+      for (const e of rootEntries) {
+        if (e.isDirectory() && targetDirNames.includes(e.name.toLowerCase())) {
+          const candidate = nodePath.join(root, e.name);
+          if (!targetDirs.includes(candidate)) {
+            targetDirs.push(candidate);
+          }
+        }
+      }
+
+      const files = [];
+      let scanSource;
+      if (targetDirs.length > 0) {
+        // Standard structure: Db/Events/ and/or Db/Decisions/
+        for (const dir of targetDirs) {
+          collectFtgFilesRecursive(dir, files);
+        }
+        scanSource = `subfolders: ${targetDirs.map((d) => nodePath.basename(d)).join(", ")}`;
+      } else if (nodeFs.existsSync(dbDir)) {
+        // Flat structure: events directly in Db/ (e.g. Db/events.txt)
+        const dbEntries = nodeFs.readdirSync(dbDir, { withFileTypes: true });
+        for (const e of dbEntries) {
+          if (!e.isDirectory()) {
+            const lower = e.name.toLowerCase();
+            if (
+              lower.endsWith(".txt") ||
+              lower.endsWith(".eue") ||
+              lower.endsWith(".eug") ||
+              lower.endsWith(".inc")
+            ) {
+              files.push(nodePath.join(dbDir, e.name));
+            }
+          }
+        }
+        scanSource = `flat files in Db/`;
+      }
+
+      if (files.length === 0) {
+        vscode.window.showWarningMessage(
+          `FTG Toolkit: No event/decision files found to scan.\nRoot: ${root}\nDb: ${dbDir}`,
+        );
+        return;
+      }
+
+      // Open and clear output channel
+      ftgOutputChannel.clear();
+      ftgOutputChannel.show(true);
+      const scanStart = new Date();
+      ftgOutputChannel.appendLine(
+        `=== FTG Toolkit: Scan started at ${scanStart.toLocaleTimeString()} ===`,
+      );
+      ftgOutputChannel.appendLine(`Root: ${root}`);
+      ftgOutputChannel.appendLine(`Source: ${scanSource}`);
+      ftgOutputChannel.appendLine(`Files to scan: ${files.length}`);
+      ftgOutputChannel.appendLine("");
+
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "FTG Toolkit: Scanning...",
+          cancellable: false,
+        },
+        async (progress) => {
+          const lines = [];
+          let fileIdx = 0;
+          for (const filePath of files) {
+            fileIdx += 1;
+            const relPath = nodePath
+              .relative(root, filePath)
+              .replace(/\\/g, "/");
+            progress.report({
+              increment: 100 / files.length,
+              message: `${fileIdx}/${files.length}: ${nodePath.basename(filePath)}`,
+            });
+            ftgOutputChannel.appendLine(
+              `[${fileIdx}/${files.length}] Scanning: ${relPath}`,
+            );
+            let doc;
+            try {
+              doc = await vscode.workspace.openTextDocument(
+                vscode.Uri.file(filePath),
+              );
+            } catch (e) {
+              ftgOutputChannel.appendLine(`  ERROR opening file: ${e.message}`);
+              continue;
+            }
+            const diags = validateFtgDocument(doc);
+            if (diags.length === 0) {
+              ftgOutputChannel.appendLine(`  OK (no problems)`);
+            } else {
+              ftgOutputChannel.appendLine(
+                `  ${diags.length} problem(s) found:`,
+              );
+              for (const d of diags) {
+                const lineNo = d.range.start.line + 1;
+                const severity =
+                  d.severity === vscode.DiagnosticSeverity.Error
+                    ? "ERROR"
+                    : "WARNING";
+                ftgOutputChannel.appendLine(
+                  `    [${severity}] L${lineNo}: ${d.message}`,
+                );
+                lines.push(`${severity}\t${relPath}\tL${lineNo}\t${d.message}`);
+              }
+            }
+          }
+
+          const scanEnd = new Date();
+          const elapsed = ((scanEnd - scanStart) / 1000).toFixed(1);
+          ftgOutputChannel.appendLine("");
+          if (lines.length === 0) {
+            ftgOutputChannel.appendLine(
+              `=== Scan complete in ${elapsed}s � no problems found ===`,
+            );
+            vscode.window.showInformationMessage(
+              "FTG Toolkit: No problems found in Events/Decisions!",
+            );
+            return;
+          }
+
+          ftgOutputChannel.appendLine(
+            `=== Scan complete in ${elapsed}s � ${lines.length} problem(s) found. Results copied to clipboard. ===`,
+          );
+          const header = `LEVEL\tFILE\tLINE\tMESSAGE\n`;
+          const text = header + lines.join("\n");
+          await vscode.env.clipboard.writeText(text);
+          vscode.window.showInformationMessage(
+            `FTG Toolkit: Found ${lines.length} problem(s). Results copied to clipboard.`,
+          );
+        },
+      );
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("ftgRefs.formatDocument", async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) return;
+      const doc = editor.document;
+      const sel = editor.selection;
+      const hasSelection = !sel.isEmpty;
+
+      let rangeToFormat, textToFormat;
+      if (hasSelection) {
+        // expand to full lines
+        rangeToFormat = new vscode.Range(
+          sel.start.with({ character: 0 }),
+          doc.lineAt(sel.end.line).range.end,
+        );
+        textToFormat = doc.getText(rangeToFormat);
+      } else {
+        rangeToFormat = new vscode.Range(
+          doc.positionAt(0),
+          doc.positionAt(doc.getText().length),
+        );
+        textToFormat = doc.getText();
+      }
+
+      const formatted = formatFtgText(textToFormat);
+      await editor.edit((eb) => eb.replace(rangeToFormat, formatted));
+    }),
+  );
+}
+
+/**
+ * Tokenizuje i reformatuje tekst FTG � rozwija kompaktowe bloki do wielu linii,
+ * wci??a tabulatorami.
+ */
+function formatFtgText(rawText) {
+  const TAB = "\t";
+
+  // ?? Tokenizer ??????????????????????????????????????????????????????????????
+  const tokens = [];
+  let i = 0;
+  const len = rawText.length;
+  let lineNo = 0;
+
+  while (i < len) {
+    const ch = rawText[i];
+
+    // whitespace
+    if (ch === " " || ch === "\t" || ch === "\r") {
+      i++;
+      continue;
+    }
+    if (ch === "\n") {
+      lineNo++;
+      i++;
+      continue;
+    }
+
+    // comment
+    if (ch === "#") {
+      let j = i;
+      while (j < len && rawText[j] !== "\n") j++;
+      tokens.push({
+        type: "COMMENT",
+        value: rawText.slice(i, j).trimEnd(),
+        line: lineNo,
+      });
+      i = j;
+      continue;
+    }
+
+    // quoted string � end is the LAST " on this logical line
+    if (ch === '"') {
+      // Find closing quote - may span multiple lines (e.g. desc = "...")
+      const strStartLine = lineNo;
+      let closeQuote = rawText.indexOf('"', i + 1);
+      if (closeQuote === -1) closeQuote = len - 1;
+      // advance lineNo for any newlines consumed inside the string
+      for (let k = i + 1; k <= closeQuote; k++) {
+        if (rawText[k] === "\n") lineNo++;
+      }
+      tokens.push({
+        type: "STRING",
+        value: rawText.slice(i, closeQuote + 1),
+        line: strStartLine,
+      });
+      i = closeQuote + 1;
+      continue;
+    }
+
+    if (ch === "{") {
+      tokens.push({ type: "LBRACE", line: lineNo });
+      i++;
+      continue;
+    }
+    if (ch === "}") {
+      tokens.push({ type: "RBRACE", line: lineNo });
+      i++;
+      continue;
+    }
+    if (ch === "=") {
+      tokens.push({ type: "EQUALS", line: lineNo });
+      i++;
+      continue;
+    }
+
+    // word / number
+    let j = i;
+    while (j < len && !/[\s{}="#]/.test(rawText[j])) j++;
+    if (j > i) {
+      tokens.push({ type: "WORD", value: rawText.slice(i, j), line: lineNo });
+      i = j;
+    } else {
+      i++; // skip unknown
+    }
+  }
+
+  // ?? Rekonstrukcja ??????????????????????????????????????????????????????????
+  function tokenText(tok) {
+    if (!tok) return "";
+    if (tok.type === "LBRACE") return "{";
+    if (tok.type === "RBRACE") return "}";
+    if (tok.type === "EQUALS") return "=";
+    return tok.value ?? "";
+  }
+
+  const lines = [];
+  let depth = 0;
+  let pos = 0;
+
+  function peek(off = 0) {
+    return tokens[pos + off];
+  }
+  function consume() {
+    return tokens[pos++];
+  }
+  function ind() {
+    return TAB.repeat(depth);
+  }
+
+  // Je?li po aktualnym tokenie (tu? za warto?ci?/RBRACE) stoi COMMENT na TEJ SAMEJ oryginalnej linii, do??cz go.
+  function trailingComment() {
+    const lastLine = pos > 0 ? (tokens[pos - 1].line ?? -1) : -1;
+    const t = peek();
+    if (t && t.type === "COMMENT" && t.line === lastLine) {
+      consume();
+      return " " + t.value;
+    }
+    return "";
+  }
+
+  const LOGIC_BLOCK_NAMES = new Set(["and", "or", "not", "someof"]);
+  // Bloki trigger-like: 1 element top-level ? zawsze jedna linia (nested {} dopuszczalne)
+  const TRIGGER_LIKE_NAMES = new Set(["trigger", "potential", "ai_trigger"]);
+
+  // Zbiera tokeny wewn?trz bloku (od pos do matching RBRACE) jako inline string.
+  // ?ledzi g??boko?? � poprawnie obs?uguje zagnie?d?one {}.
+  // Pomija COMMENT (utrata komentarzy wewn?trznych przy inliningu jest akceptowalna).
+  function collectFlatDeep() {
+    const parts = [];
+    let depth = 0;
+    while (pos < tokens.length) {
+      const t = tokens[pos];
+      if (t.type === "RBRACE" && depth === 0) {
+        pos++;
+        break;
+      }
+      if (t.type === "LBRACE") {
+        depth++;
+        parts.push("{");
+        pos++;
+        continue;
+      }
+      if (t.type === "RBRACE") {
+        depth--;
+        parts.push("}");
+        pos++;
+        continue;
+      }
+      if (t.type === "COMMENT") {
+        pos++;
+        continue;
+      } // komentarze wewn?trzne pomijamy przy inlinie
+      parts.push(tokenText(t));
+      pos++;
+    }
+    return parts;
+  }
+
+  // Liczy ile element�w pierwszego poziomu jest w bloku zaczynaj?c od startPos (po LBRACE).
+  // Element = WORD/STRING (pomija komentarze i zagnie?d?one bloki).
+  function countTopLevelItems(startPos) {
+    let count = 0;
+    let depth = 0;
+    let p = startPos;
+    while (p < tokens.length) {
+      const t = tokens[p];
+      if (t.type === "RBRACE" && depth === 0) break;
+      if (t.type === "LBRACE") {
+        depth++;
+        p++;
+        continue;
+      }
+      if (t.type === "RBRACE") {
+        depth--;
+        p++;
+        continue;
+      }
+      if (t.type === "COMMENT" || t.type === "EQUALS") {
+        p++;
+        continue;
+      }
+      if (depth === 0 && (t.type === "WORD" || t.type === "STRING")) {
+        // liczymy tylko klucze (nie warto?ci po =)
+        if (p === startPos || tokens[p - 1]?.type !== "EQUALS") {
+          count++;
+        }
+      }
+      p++;
+    }
+    return count;
+  }
+
+  while (pos < tokens.length) {
+    const tok = peek();
+    if (!tok) break;
+
+    // Standalone comment
+    if (tok.type === "COMMENT") {
+      consume();
+      lines.push(ind() + tok.value);
+      continue;
+    }
+
+    // Closing brace
+    if (tok.type === "RBRACE") {
+      consume();
+      if (depth > 0) depth--;
+      lines.push(ind() + "}" + trailingComment());
+      continue;
+    }
+
+    // Orphan opening brace (anonymous block)
+    if (tok.type === "LBRACE") {
+      consume();
+      lines.push(ind() + "{" + trailingComment());
+      depth++;
+      continue;
+    }
+
+    // WORD = ...
+    if (tok.type === "WORD" || tok.type === "STRING") {
+      const next = peek(1);
+
+      if (next && next.type === "EQUALS") {
+        consume(); // WORD/STRING
+        consume(); // EQUALS
+        const fieldName = tokenText(tok);
+        const fieldLower = fieldName.toLowerCase();
+
+        const valTok = peek();
+
+        if (valTok && valTok.type === "LBRACE") {
+          consume(); // LBRACE
+
+          if (LOGIC_BLOCK_NAMES.has(fieldLower)) {
+            // AND/OR/NOT/someof: 1 element (bez nested) ? jedna linia; >1 ? rozwi?
+            const itemCount = countTopLevelItems(pos);
+            let hasNested = false;
+            let hasCmt = false;
+            {
+              let depth2 = 0,
+                p = pos;
+              while (p < tokens.length) {
+                const t = tokens[p];
+                if (t.type === "RBRACE" && depth2 === 0) break;
+                if (t.type === "LBRACE") {
+                  hasNested = true;
+                  break;
+                }
+                if (t.type === "COMMENT") {
+                  hasCmt = true;
+                }
+                p++;
+              }
+            }
+            const flatLogic = itemCount <= 1 && !hasNested && !hasCmt;
+            if (flatLogic) {
+              const parts = collectFlatDeep();
+              lines.push(
+                ind() +
+                  fieldName +
+                  " = { " +
+                  parts.join(" ") +
+                  " }" +
+                  trailingComment(),
+              );
+            } else {
+              lines.push(ind() + fieldName + " = {" + trailingComment());
+              depth++;
+            }
+          } else if (TRIGGER_LIKE_NAMES.has(fieldLower)) {
+            // trigger/potential/ai_trigger: 1 element top-level ? zawsze jedna linia
+            // (even if that element is a nested OR/AND/NOT block)
+            const itemCount = countTopLevelItems(pos);
+            let hasCmt = false;
+            {
+              let p = pos,
+                d = 0;
+              while (p < tokens.length) {
+                const t = tokens[p];
+                if (t.type === "RBRACE" && d === 0) break;
+                if (t.type === "LBRACE") {
+                  d++;
+                  p++;
+                  continue;
+                }
+                if (t.type === "RBRACE") {
+                  d--;
+                  p++;
+                  continue;
+                }
+                if (t.type === "COMMENT") {
+                  hasCmt = true;
+                  break;
+                }
+                p++;
+              }
+            }
+            let hasNested = false;
+            {
+              let p = pos,
+                d = 0;
+              while (p < tokens.length) {
+                const t = tokens[p];
+                if (t.type === "RBRACE" && d === 0) break;
+                if (t.type === "LBRACE") {
+                  hasNested = true;
+                  break;
+                }
+                p++;
+              }
+            }
+            if (itemCount <= 1 && !hasCmt && !hasNested) {
+              const parts = collectFlatDeep();
+              lines.push(
+                ind() +
+                  fieldName +
+                  " = { " +
+                  parts.join(" ") +
+                  " }" +
+                  trailingComment(),
+              );
+            } else {
+              lines.push(ind() + fieldName + " = {" + trailingComment());
+              depth++;
+            }
+          } else {
+            // Pozosta?e bloki: p?askie (brak { i COMMENT) ? jedna linia
+            let scanPos = pos;
+            let flat = true;
+            while (scanPos < tokens.length) {
+              const st = tokens[scanPos];
+              if (st.type === "RBRACE") break;
+              if (st.type === "LBRACE" || st.type === "COMMENT") {
+                flat = false;
+                break;
+              }
+              scanPos++;
+            }
+            if (flat) {
+              const parts = collectFlatDeep();
+              lines.push(
+                ind() +
+                  fieldName +
+                  " = { " +
+                  parts.join(" ") +
+                  " }" +
+                  trailingComment(),
+              );
+            } else {
+              lines.push(ind() + fieldName + " = {" + trailingComment());
+              depth++;
+            }
+          }
+        } else if (valTok && valTok.type !== "COMMENT") {
+          consume();
+          lines.push(
+            ind() + fieldName + " = " + tokenText(valTok) + trailingComment(),
+          );
+        } else {
+          // no value (shouldn't happen in valid FTG)
+          lines.push(ind() + fieldName + " =" + trailingComment());
+        }
+      } else {
+        // bare word without =
+        consume();
+        lines.push(ind() + tokenText(tok) + trailingComment());
+      }
+      continue;
+    }
+
+    // fallback
+    consume();
+  }
+
+  // ?? Post-processing: puste linie + scalanie type/which/value ?????????????
+  const result = [];
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    const nextLine = lines[li + 1] ?? null;
+
+    // Scal linie type = X, which = Y, value = Z w jedn?
+    if (/^\s*type\s*=\s*\S+\s*$/.test(line)) {
+      let merged = line.trimEnd();
+      while (
+        li + 1 < lines.length &&
+        /^\s*(?:which|value)\s*=\s*\S+\s*$/.test(lines[li + 1])
+      ) {
+        li++;
+        merged += " " + lines[li].trim();
+      }
+      result.push(merged);
+      continue;
+    }
+
+    result.push(line);
+    // pusta linia po desc = "..."
+    if (
+      /\bdesc\s*=/.test(line) &&
+      nextLine !== null &&
+      nextLine.trim() !== ""
+    ) {
+      result.push("");
+    }
+    // pusta linia przed action_a (je?li poprzednia nie jest pusta)
+    if (
+      nextLine !== null &&
+      /^\s*action_a\s*=/i.test(nextLine) &&
+      line.trim() !== ""
+    ) {
+      result.push("");
+    }
+  }
+
+  return result.join("\n");
 }
 
 function provideFtgHover(document, position) {
